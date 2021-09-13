@@ -350,8 +350,8 @@ class FusedTransformerEncoderLayer(Layer):
             dropout=dropout,
             act_dropout=act_dropout,
             normalize_before=self.normalize_before,
-            weight_attrs[1],
-            bias_attrs[1])
+            weight_attr=weight_attrs[1],
+            bias_attr=bias_attrs[1])
 
     def forward(self, src, src_mask=None, cache=None):
         """
@@ -388,7 +388,7 @@ class FusedTransformerEncoderLayer(Layer):
             attn_out = self.fused_attn(src, attn_mask=src_mask)
         else:
             attn_out, incremental_cache = self.fused_attn(
-                src, attn_mask=src_mask, cache)
+                src, attn_mask=src_mask, cache=cache)
 
         ffn_out = self.ffn(attn_out)
         return ffn_out if cache is None else (ffn_out, incremental_cache)
