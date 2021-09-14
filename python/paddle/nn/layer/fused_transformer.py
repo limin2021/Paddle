@@ -16,6 +16,7 @@ import copy
 from .. import functional as F
 from paddle.nn import Layer
 from ...framework import ParamAttr
+from ..initializer import Constant
 
 import collections
 
@@ -188,9 +189,11 @@ class FusedFeedForward(Layer):
                  bias_attr=None):
 
         super(FusedFeedForward, self).__init__()
-
-        #self._weight_attrs = _convert_param_attr_to_list(weight_attr, 2)
-        #self._bias_attrs = _convert_param_attr_to_list(bias_attr, 2)
+        assert d_model > 0, ("Expected d_model to be greater than 0, "
+                             "but recieved {}".format(d_model))
+        assert dim_feedforward > 0, (
+            "Expected dim_feedforward to be greater than 0, "
+            "but recieved {}".format(dim_feedforward))
 
         self._dtype = self._helper.get_default_dtype()
         self._d_model = d_model
@@ -199,8 +202,6 @@ class FusedFeedForward(Layer):
         self._act_dropout = dropout if act_dropout is None else act_dropout
         self._act_method = activation
         self._normalize_before = normalize_before
-        #self._weight_attr = self._weight_attrs[1]
-        #self._bias_attr = self._bias_attrs[1]
 
         self._linear1_weight = self.create_parameter(
             shape=[d_model, dim_feedforward],

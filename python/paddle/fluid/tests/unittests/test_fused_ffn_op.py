@@ -153,10 +153,6 @@ class TestFusedFFNOp(unittest.TestCase):
     def test_fused_ffn(self):
         base_out, base_grad = self.Base()
         fused_out, fused_grad = self.FusedFFN()
-        if base_grad is None:
-            print("base grad is none")
-        if fused_grad is None:
-            print("fused grad is none")
 
         np.testing.assert_allclose(
             base_out.numpy(), fused_out.numpy(), rtol=self.rtol, atol=self.atol)
@@ -203,6 +199,81 @@ class TestFusedFFNOpNormalizeBefore(TestFusedFFNOp):
         self.query_length = 1
         self.d_model = 8
         self.dim_feedforward = 8
+
+
+class TestFusedFFNOpApi(TestFusedFFNOp):
+    def setUp(self):
+        self.getDtype()
+        self.getShape()
+        self.getDiff()
+        self.getActivation()
+        self.getNormalizeBefore()
+        self.weight_attr = None
+        self.bias_attr = None
+
+        self.weight_attrs = fused_transformer._convert_param_attr_to_list(
+            self.weight_attr, 2)
+        self.bias_attrs = fused_transformer._convert_param_attr_to_list(
+            self.bias_attr, 2)
+        self.ffn_layer = fused_transformer.FusedFeedForward(
+            self.d_model, self.dim_feedforward, 0.0, self.act_method, 0.0,
+            self.normalize_before, self.weight_attrs[1], self.bias_attrs[1])
+
+        self.ln1_scale = self.ffn_layer._ln1_scale
+        self.ln1_bias = self.ffn_layer._ln1_bias
+        self.ln2_scale = self.ffn_layer._ln2_scale
+        self.ln2_bias = self.ffn_layer._ln2_bias
+        self.linear1_weight = self.ffn_layer._linear1_weight
+        self.linear1_bias = self.ffn_layer._linear1_bias
+        self.linear2_weight = self.ffn_layer._linear2_weight
+        self.linear2_bias = self.ffn_layer._linear2_bias
+
+        self.src = np.random.random((self.batch_size, self.query_length,
+                                     self.d_model)).astype(self.dtype)
+        self.dout = np.random.random((self.batch_size, self.query_length,
+                                      self.d_model)).astype(self.dtype)
+
+        self.dropout1 = Dropout(0.0, mode="upscale_in_train")
+        self.dropout2 = Dropout(0.0, mode="upscale_in_train")
+        self.activation = getattr(F, self.act_method)
+
+    def Base(self):
+        tensor_src = paddle.to_tensor(self.src, stop_gradient=False)
+        residual = paddle.to_tensor(self.src)
+        if self.normalize_before:
+            ln1_out = F.layer_norm(tensor_src,
+                                   list([self.d_model]), self.ln1_scale,
+                                   self.ln1_bias)
+            linear1_out = F.linear(ln1_out, self.linear1_weight,
+                                   self.linear1_bias)
+            act_out = self.activation(linear1_out)
+            dropout1_out = self.dropout1(act_out)
+            linear2_out = F.linear(dropout1_out, self.linear2_weight,
+                                   self.linear2_bias)
+            dropout2_out = residual + self.dropout2(linear2_out)
+            paddle.autograd.backward([dropout2_out],
+                                     [paddle.to_tensor(self.dout)], True)
+            return dropout2_out, tensor_src.grad
+        else:
+            linear1_out = F.linear(tensor_src, self.linear1_weight,
+                                   self.linear1_bias)
+            act_out = self.activation(linear1_out)
+            dropout1_out = self.dropout1(act_out)
+            linear2_out = F.linear(dropout1_out, self.linear2_weight,
+                                   self.linear2_bias)
+            dropout2_out = residual + self.dropout2(linear2_out)
+            dropout2_out = F.layer_norm(dropout2_out,
+                                        list([self.d_model]), self.ln2_scale,
+                                        self.ln2_bias)
+            paddle.autograd.backward([dropout2_out],
+                                     [paddle.to_tensor(self.dout)], True)
+            return dropout2_out, tensor_src.grad
+
+    def FusedFFN(self):
+        tensor_src = paddle.to_tensor(self.src, stop_gradient=False)
+        out = self.ffn_layer(tensor_src)
+        paddle.autograd.backward([out], [paddle.to_tensor(self.dout)])
+        return out, tensor_src.grad
 
 
 if __name__ == "__main__":
