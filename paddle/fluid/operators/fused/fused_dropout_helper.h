@@ -132,8 +132,9 @@ class FusedDropoutHelper {
     auto increment = GetIncrement(ctx);
     LaunchResidualDropoutBias<T, MaskType>(
         rows_, cols_, increment, dropout_param_.seed,
-        dropout_param_.dropout_prob, dropout_param_.is_upscale_in_train,
-        dropout_param_.is_test, src, residual, bias, mask, out, ctx);
+        dropout_param_.dropout_prob, dropout_param_.is_test,
+        dropout_param_.is_upscale_in_train, src, residual, bias, mask, out,
+        ctx);
   }
 
   void ResidualDropoutBiasGrad(const platform::CUDADeviceContext& ctx,

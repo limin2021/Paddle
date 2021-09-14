@@ -64,6 +64,7 @@ __forceinline__ __device__ void FusedResidualDropoutBiasOneThread(
     for (int ii = 0; ii < VecSize; ii++) {
       mask_vec[ii] = static_cast<MaskType>(rand[ii] >= dropout_prob);
     }
+    platform::Store<MaskType, VecSize>(mask_vec, &mask[row_id * cols + col_id]);
   } else {
 #pragma unroll
     for (int ii = 0; ii < VecSize; ii++) {
@@ -90,9 +91,6 @@ __forceinline__ __device__ void FusedResidualDropoutBiasOneThread(
 
   // store result to global
   platform::Store<T, VecSize>(dest_vec, &dst[row_id * cols + col_id]);
-  if (!is_test) {
-    platform::Store<MaskType, VecSize>(mask_vec, &mask[row_id * cols + col_id]);
-  }
 }
 
 /**

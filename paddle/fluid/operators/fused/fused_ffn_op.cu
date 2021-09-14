@@ -315,7 +315,7 @@ class FusedFfnGradKernel : public framework::OpKernel<T> {
     auto linear1_weight = *context.Input<framework::Tensor>("Linear1Weight");
     auto linear1_bias = context.Input<framework::Tensor>("Linear1Bias");
     auto linear2_weight = *context.Input<framework::Tensor>("Linear2Weight");
-    auto ln1_mean = *context.Input<framework::Tensor>("Linear2Bias");
+    auto ln1_mean = *context.Input<framework::Tensor>("Ln1Mean");
     auto ln1_variance = *context.Input<framework::Tensor>("Ln1Variance");
     auto ln1_scale = context.Input<framework::Tensor>("Ln1Scale");
     auto ln1_bias = context.Input<framework::Tensor>("Ln1Bias");

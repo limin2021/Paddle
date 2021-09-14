@@ -34,14 +34,34 @@ place = paddle.CUDAPlace(0)
 @unittest.skipIf(not core.is_compiled_with_cuda(),
                  "Paddle core is not compiled with CUDA")
 class TestFusedFFNOp(unittest.TestCase):
-    def setUp(self):
+    def getDtype(self):
+        self.dtype = "float32"
+        self.layer_norm_dtype = "float32"
+
+    def getShape(self):
         self.batch_size = np.random.randint(1, 64)
         self.query_length = np.random.randint(32, 256)
         self.d_model = np.random.randint(32, 1024)
         self.dim_feedforward = np.random.randint(32, 4096)
-        self.normalize_before = False
+
+    def getDiff(self):
+        self.rtol = 1e-4
+        self.atol = 1e-5
+
+    def getActivation(self):
         self.act_method = "gelu"
 
+    def getNormalizeBefore(self):
+        self.normalize_before = False
+
+    def setUp(self):
+        self.getDtype()
+        self.getShape()
+        self.getDiff()
+        self.getActivation()
+        self.getNormalizeBefore()
+
+        paddle.set_default_dtype(self.dtype)
         self.weight_attr = None
         self.bias_attr = None
 
@@ -61,6 +81,7 @@ class TestFusedFFNOp(unittest.TestCase):
             self.weight_attrs[1],
             bias_attr=self.bias_attrs[1])
 
+        paddle.set_default_dtype(self.layer_norm_dtype)
         self.norm1 = LayerNorm(self.d_model)
         self.norm2 = LayerNorm(self.d_model)
         self.dropout = Dropout(0.0, mode="upscale_in_train")
@@ -69,24 +90,28 @@ class TestFusedFFNOp(unittest.TestCase):
         self.activation = getattr(F, self.act_method)
 
         self.src = np.random.random((self.batch_size, self.query_length,
-                                     self.d_model)).astype("float32")
+                                     self.d_model)).astype(self.dtype)
         self.dout = np.random.random((self.batch_size, self.query_length,
-                                      self.d_model)).astype("float32")
+                                      self.d_model)).astype(self.dtype)
 
     def Base(self):
         tensor_src = paddle.to_tensor(self.src, stop_gradient=False)
         residual = paddle.to_tensor(self.src)
-        ln1_out = tensor_src
         if self.normalize_before:
             ln1_out = self.norm1(tensor_src)
 
-        linear2_out = self.linear2(
-            self.dropout(self.activation(self.linear1(ln1_out))))
-        dropout2_out = residual + self.dropout2(linear2_out)
-        if not self.normalize_before:
+            linear2_out = self.linear2(
+                self.dropout(self.activation(self.linear1(ln1_out))))
+            dropout2_out = residual + self.dropout2(linear2_out)
+            paddle.autograd.backward([dropout2_out],
+                                     [paddle.to_tensor(self.dout)])
+        else:
+            linear2_out = self.linear2(
+                self.dropout(self.activation(self.linear1(tensor_src))))
+            dropout2_out = residual + self.dropout2(linear2_out)
             dropout2_out = self.norm2(dropout2_out)
-
-        paddle.autograd.backward([dropout2_out], [paddle.to_tensor(self.dout)])
+            paddle.autograd.backward([dropout2_out],
+                                     [paddle.to_tensor(self.dout)])
         return dropout2_out, tensor_src.grad
 
     def FusedFFN(self):
@@ -126,14 +151,58 @@ class TestFusedFFNOp(unittest.TestCase):
             return out, x.grad
 
     def test_fused_ffn(self):
-        print(self.batch_size, self.query_length, self.d_model,
-              self.dim_feedforward)
         base_out, base_grad = self.Base()
         fused_out, fused_grad = self.FusedFFN()
+        if base_grad is None:
+            print("base grad is none")
+        if fused_grad is None:
+            print("fused grad is none")
+
         np.testing.assert_allclose(
-            base_out, fused_out.numpy(), rtol=1e-5, atol=1e-5)
+            base_out.numpy(), fused_out.numpy(), rtol=self.rtol, atol=self.atol)
         np.testing.assert_allclose(
-            base_grad, fused_grad.numpy(), rtol=1e-5, atol=1e-5)
+            base_grad.numpy(),
+            fused_grad.numpy(),
+            rtol=self.rtol,
+            atol=self.atol)
+
+
+class TestFusedFFNOpFp16(TestFusedFFNOp):
+    def getDtype(self):
+        self.dtype = "float16"
+        self.layer_norm_dtype = "float32"
+
+    def getDiff(self):
+        self.rtol = 1e-2
+        self.atol = 1e-3
+
+    def getShape(self):
+        self.batch_size = 1
+        self.query_length = 8
+        self.d_model = 8
+        self.dim_feedforward = 8
+
+
+class TestFusedFFNOpFp64(TestFusedFFNOp):
+    def getDtype(self):
+        self.dtype = "float64"
+        self.layer_norm_dtype = "float64"
+
+
+class TestFusedFFNOpActivation(TestFusedFFNOp):
+    def getActivation(self):
+        self.act_method = "relu"
+
+
+class TestFusedFFNOpNormalizeBefore(TestFusedFFNOp):
+    def getNormalizeBefore(self):
+        self.normalize_before = True
+
+    def getShape(self):
+        self.batch_size = 1
+        self.query_length = 1
+        self.d_model = 8
+        self.dim_feedforward = 8
 
 
 if __name__ == "__main__":
