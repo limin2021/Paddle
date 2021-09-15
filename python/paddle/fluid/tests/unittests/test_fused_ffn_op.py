@@ -55,6 +55,7 @@ class TestFusedFFNOp(unittest.TestCase):
         self.normalize_before = False
 
     def setUp(self):
+        paddle.disable_static()
         self.getDtype()
         self.getShape()
         self.getDiff()
@@ -95,6 +96,7 @@ class TestFusedFFNOp(unittest.TestCase):
                                       self.d_model)).astype(self.dtype)
 
     def Base(self):
+        paddle.disable_static()
         tensor_src = paddle.to_tensor(self.src, stop_gradient=False)
         residual = paddle.to_tensor(self.src)
         if self.normalize_before:
@@ -115,6 +117,7 @@ class TestFusedFFNOp(unittest.TestCase):
         return dropout2_out, tensor_src.grad
 
     def FusedFFN(self):
+        paddle.disable_static()
         with fluid.dygraph.guard(fluid.CUDAPlace(0)):
             linear1_weight = paddle.to_tensor(
                 self.linear1.weight, stop_gradient=False)
@@ -238,6 +241,7 @@ class TestFusedFFNOpApi(TestFusedFFNOp):
         self.activation = getattr(F, self.act_method)
 
     def Base(self):
+        paddle.disable_static()
         tensor_src = paddle.to_tensor(self.src, stop_gradient=False)
         residual = paddle.to_tensor(self.src)
         if self.normalize_before:
@@ -270,10 +274,110 @@ class TestFusedFFNOpApi(TestFusedFFNOp):
             return dropout2_out, tensor_src.grad
 
     def FusedFFN(self):
+        paddle.disable_static()
         tensor_src = paddle.to_tensor(self.src, stop_gradient=False)
         out = self.ffn_layer(tensor_src)
         paddle.autograd.backward([out], [paddle.to_tensor(self.dout)])
         return out, tensor_src.grad
+
+
+@unittest.skipIf(not core.is_compiled_with_cuda(),
+                 "Paddle core is not compiled with CUDA")
+class APITestStaticFusedFFN(unittest.TestCase):
+    def test_static(self):
+        paddle.enable_static()
+        dtype = "float32"
+        layer_norm_dtype = "float32"
+        batch_size = 1
+        d_model = 8
+        dim_feedforward = 8
+
+        x = paddle.static.data(
+            name='x', shape=[batch_size, d_model, dim_feedforward], dtype=dtype)
+        linear1_weight = paddle.static.data(
+            name='linear1_weight',
+            shape=[d_model, dim_feedforward],
+            dtype=dtype)
+        linear1_bias = paddle.static.data(
+            name='linear1_bias', shape=[dim_feedforward])
+        linear2_weight = paddle.static.data(
+            name='linear2_weight',
+            shape=[dim_feedforward, d_model],
+            dtype=dtype)
+        linear2_bias = paddle.static.data(name='linear2_bias', shape=[d_model])
+        ln1_scale = paddle.static.data(name='ln1_scale', shape=[d_model])
+        ln1_bias = paddle.static.data(name='ln1_scale', shape=[d_model])
+        ln2_scale = paddle.static.data(name='ln2_scale', shape=[d_model])
+        ln2_bias = paddle.static.data(name='ln2_scale', shape=[d_model])
+
+        fused_out = F.fused_ffn(
+            x,
+            linear1_weight,
+            linear2_weight,
+            None,
+            None,
+            linear1_bias,
+            linear2_bias,
+            ln1_scale,
+            ln1_bias,
+            ln2_scale,
+            ln2_bias,
+            0.0,
+            0.0,
+            act_method="relu",
+            normalize_pre_or_post=False)
+
+        ######base ffn######
+        linear1_out = F.linear(x, linear1_weight, linear1_bias)
+        act_out = F.relu(linear1_out)
+        dropout1_out = F.dropout(x=act_out, p=0.0, training=False)
+        linear2_out = F.linear(dropout1_out, linear2_weight, linear2_bias)
+        dropout2_out = x + F.dropout(x=linear2_out, p=0.0, training=False)
+        ln_out = F.layer_norm(
+            dropout2_out,
+            normalized_shape=list([d_model]),
+            weight=ln2_scale,
+            bias=ln2_bias)
+        ######base ffn######
+
+        exe = paddle.static.Executor(place)
+
+        x_data = np.random.random(
+            (batch_size, d_model, dim_feedforward)).astype(dtype)
+        linear1_weight_data = np.random.random(
+            (d_model, dim_feedforward)).astype(dtype)
+        linear1_bias_data = np.zeros((dim_feedforward)).astype(dtype)
+        linear2_weight_data = np.random.random(
+            (dim_feedforward, d_model)).astype(dtype)
+        linear2_bias_data = np.zeros((d_model)).astype(dtype)
+
+        ln1_scale_data = np.ones((d_model)).astype(layer_norm_dtype)
+        ln1_bias_data = np.zeros((d_model)).astype(layer_norm_dtype)
+        ln2_scale_data = np.ones((d_model)).astype(layer_norm_dtype)
+        ln2_bias_data = np.zeros((d_model)).astype(layer_norm_dtype)
+
+        res_list = [fused_out, ln_out]
+        real_res = []
+
+        for res in res_list:
+            fetch = exe.run(feed={
+                'x': x_data,
+                'linear1_weight': linear1_weight_data,
+                'linear1_bias': linear1_bias_data,
+                'linear2_weight': linear2_weight_data,
+                'linear2_bias': linear2_bias_data,
+                'ln1_scale': ln1_scale_data,
+                'ln1_bias': ln1_bias_data,
+                'ln2_scale': ln2_scale_data,
+                'ln2_bias': ln2_bias_data
+            },
+                            fetch_list=[res])
+            real_res.append(fetch)
+        self.assertTrue(
+            np.allclose(
+                real_res[0], real_res[1], atol=1e-5),
+            "two value is check diff")
+        print("test static success")
 
 
 if __name__ == "__main__":
