@@ -28,8 +28,6 @@ from paddle.nn.layer.common import Linear, Dropout
 
 import unittest
 
-place = paddle.CUDAPlace(0)
-
 
 @unittest.skipIf(not core.is_compiled_with_cuda(),
                  "Paddle core is not compiled with CUDA")
@@ -131,15 +129,11 @@ class TestFusedFFNOp(unittest.TestCase):
             ln1_bias = paddle.to_tensor(self.norm1.bias, stop_gradient=False)
             ln2_scale = paddle.to_tensor(self.norm2.weight, stop_gradient=False)
             ln2_bias = paddle.to_tensor(self.norm2.bias, stop_gradient=False)
-            seed1 = None
-            seed2 = None
             x = paddle.to_tensor(self.src, stop_gradient=False)
             out = F.fused_ffn(
                 x,
                 linear1_weight,
                 linear2_weight,
-                seed1,
-                seed2,
                 linear1_bias,
                 linear2_bias,
                 ln1_scale,
@@ -314,8 +308,6 @@ class APITestStaticFusedFFN(unittest.TestCase):
             x,
             linear1_weight,
             linear2_weight,
-            None,
-            None,
             linear1_bias,
             linear2_bias,
             ln1_scale,
@@ -340,7 +332,7 @@ class APITestStaticFusedFFN(unittest.TestCase):
             bias=ln2_bias)
         ######base ffn######
 
-        exe = paddle.static.Executor(place)
+        exe = paddle.static.Executor(paddle.CUDAPlace(0))
 
         x_data = np.random.random(
             (batch_size, d_model, dim_feedforward)).astype(dtype)

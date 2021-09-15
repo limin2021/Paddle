@@ -150,8 +150,8 @@ class FusedFfnOpMaker : public framework::OpProtoAndCheckerMaker {
     AddOutput("Dropout2Out", "The output of dropout2").AsIntermediate();
 
     AddAttr<bool>("normalize_pre_or_post", "true is pre layernorm");
-    AddAttr<float>("epsilon1", "epsilon of layer_norm1").SetDefault(1e-8f);
-    AddAttr<float>("epsilon2", "epsilon of layer_norm2").SetDefault(1e-8f);
+    AddAttr<float>("epsilon1", "epsilon of layer_norm1").SetDefault(1e-5f);
+    AddAttr<float>("epsilon2", "epsilon of layer_norm2").SetDefault(1e-5f);
     AddAttr<std::string>("act_method", "act_method").SetDefault("gelu");
 
     AddAttr<float>("dropout_prob1", "the dropout_prob of dropout1")

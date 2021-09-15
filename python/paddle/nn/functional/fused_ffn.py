@@ -36,8 +36,6 @@ def _verify_dropout_param(p, mode):
 def fused_ffn(x,
               linear1_weight,
               linear2_weight,
-              seed1_data=None,
-              seed2_data=None,
               linear1_bias=None,
               linear2_bias=None,
               ln1_scale=None,
@@ -51,31 +49,67 @@ def fused_ffn(x,
               epsilon2=1e-5,
               dropout_implementation1='upscale_in_train',
               dropout_implementation2='upscale_in_train',
-              is_test1=False,
-              is_test2=False,
-              fix_seed1=False,
-              fix_seed2=False,
-              seed1=0,
-              seed2=0,
               normalize_pre_or_post=False,
               name=None):
+    r"""
+    Fused feedforward operator.
+    the operator is the same as the following pseudo code:
+    .. code-block:: python
+
+        residual = x
+        if normalize_pre_or_post:
+            out = layer_norm(x)
+        out = linear(dropout(activation(linear(out))))
+        out = residual + dropout(out)
+        if not normalize_pre_or_post:
+            out = layer_norm(out)
+
+    Parameters:
+        x (Tensor): The input Tensor with data type float16, float32, float64.
+        linear1_weight (Tensor): The weight of first linear.
+        linear2_weight (Tensor): The weight of second linear.
+        linear1_bias (Tensor): The bias of first linear. Default is None.
+        linear2_bias (Tensor): The bias of first linear. Default is None.
+        ln1_scale (Tensor): The scale of first layer_norm. Default is None.
+        ln1_bias (Tensor): The bias of first layer_norm. Default is None.
+        ln2_scale (Tensor): The scale of second layer_norm. Default is None.
+        ln2_bias (Tensor): The bias of second layer_norm. Default is None.
+        dropout_prob1 (float|int, optional): The first dropout probility of setting units to zero. Default 0.5.
+        dropout_prob2 (float|int, optional): The second dropout probility of setting units to zero. Default 0.5.
+        act_method (string, optional): The activation. Default is relu.
+        epsilon1 (float, optional): the epsilon of first layer_norm, a small value added to the variance to prevent division by zero. Default: 1e-05
+        epsilon2 (float, optional): the epsilon of first layer_norm, a small value added to the variance to prevent division by zero. Default: 1e-05
+        dropout_implementation1 (string, option): ['upscale_in_train'(default) | 'dowscale_in_infer'].
+            1. upscale_in_train(default), upscale the output at training time
+                - train: out = input * mask / ( 1.0 - dropout_prob  )
+                - inference: out = input
+            2. downscale_in_infer, downscale the output at inference
+                - train: out = input * mask
+                - inference: out = input * (1.0 - dropout_prob)
+        dropout_implementation2 (string, option): the dropout_implementation2 of second dropout2
+        name (str, optional): Name for the operation (optional, default is None). For more information, please refer to :ref:`api_guide_Name`.
+
+    """
     _verify_dropout_param(dropout_prob1, dropout_implementation1)
     _verify_dropout_param(dropout_prob2, dropout_implementation2)
 
     if in_dygraph_mode():
         out, _, _, _, _, _, _, _, _, _, _ = _C_ops.fused_ffn(
-            x, seed1_data, seed2_data, linear1_weight, linear1_bias,
-            linear2_weight, linear2_bias, ln1_scale, ln1_bias, ln2_scale,
-            ln2_bias, 'normalize_pre_or_post', normalize_pre_or_post,
-            'epsilon1', epsilon1, 'epsilon2', epsilon2, 'act_method',
-            act_method, 'dropout_prob1', dropout_prob1, 'dropout_prob2',
-            dropout_prob2, 'dropout_implementation1', dropout_implementation1,
-            'dropout_implementation2', dropout_implementation2, 'is_test1',
-            is_test1, 'is_test2', is_test2, 'fix_seed1', fix_seed1, 'fix_seed2',
-            fix_seed2, 'seed1', seed1, 'seed2', seed2)
+            x, None, None, linear1_weight, linear1_bias, linear2_weight,
+            linear2_bias, ln1_scale, ln1_bias, ln2_scale, ln2_bias,
+            'normalize_pre_or_post', normalize_pre_or_post, 'epsilon1',
+            epsilon1, 'epsilon2', epsilon2, 'act_method', act_method,
+            'dropout_prob1', dropout_prob1, 'dropout_prob2', dropout_prob2,
+            'dropout_implementation1', dropout_implementation1,
+            'dropout_implementation2', dropout_implementation2)
         return out
 
     helper = LayerHelper("fused_ffn", **locals())
+    dtype = x.dtype
+    check_variable_and_dtype(x, 'x', ['float16', 'float32', 'float64'],
+                             'fused_ffn')
+    check_dtype(dtype, 'dtype', ['float16', 'float32', 'float64'], 'fused_ffn')
+
     out = helper.create_variable_for_type_inference(x.dtype)
     dropout1_mask = helper.create_variable_for_type_inference(
         'uint8', stop_gradient=True)
@@ -102,8 +136,6 @@ def fused_ffn(x,
         type='fused_ffn',
         inputs={
             'X': x,
-            'seed1': seed1,
-            'seed2': seed2,
             'Linear1Weight': linear1_weight,
             'Linear1Bias': linear1_bias,
             'Linear2Weight': linear2_weight,
@@ -135,12 +167,6 @@ def fused_ffn(x,
             'epsilon2': epsilon2,
             'dropout_implementation1': dropout_implementation1,
             'dropout_implementation2': dropout_implementation2,
-            'is_test1': is_test1,
-            'is_test2': is_test2,
-            'fix_seed1': fix_seed1,
-            'fix_seed2': fix_seed2,
-            'seed1': seed1,
-            'seed2': seed2,
         })
 
     return out

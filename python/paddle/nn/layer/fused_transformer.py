@@ -238,16 +238,13 @@ class FusedFeedForward(Layer):
             default_initializer=Constant(1.0))
         self._ln2_bias = self.create_parameter(
             shape=[d_model], attr=bias_attr, is_bias=True)
-        self._seed1 = None
-        self._seed2 = None
 
     def forward(self, src, cache=None):
         out = F.fused_ffn(src, self._linear1_weight, self._linear2_weight,
-                          self._seed1, self._seed2, self._linear1_bias,
-                          self._linear2_bias, self._ln1_scale, self._ln1_bias,
-                          self._ln2_scale, self._ln2_bias, self._dropout,
-                          self._act_dropout, self._act_method,
-                          self._normalize_before)
+                          self._linear1_bias, self._linear2_bias,
+                          self._ln1_scale, self._ln1_bias, self._ln2_scale,
+                          self._ln2_bias, self._dropout, self._act_dropout,
+                          self._act_method, self._normalize_before)
         return out
 
 
