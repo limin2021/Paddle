@@ -18,9 +18,9 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/fluid/operators/math/blas.h"
+#include "paddle/fluid/operators/matmul_v2_op.h"
 
 #include "paddle/fluid/operators/fused/fused_dropout_helper.h"
-#include "paddle/fluid/operators/fused/fused_ffn_op.h"
 #include "paddle/fluid/operators/layer_norm_kernel.cu.h"
 
 namespace paddle {
@@ -90,30 +90,23 @@ class FusedFfnKernel : public framework::OpKernel<T> {
           ln1_mean->data<U>(), ln1_variance->data<U>());
       in = ln1_out;
     }
-    { MatMul(ctx, *in, linear1_weight, linear1_out); }
-    {
-      fused_act_dropout_helper.DropoutActBias(
-          ctx, linear1_out->data<T>(), linear1_bias_ptr, act_method,
-          dropout1_out->data<T>(), dropout1_mask->data<uint8_t>());
-    }
+    MatMul(ctx, *in, linear1_weight, linear1_out);
+    fused_act_dropout_helper.DropoutActBias(
+        ctx, linear1_out->data<T>(), linear1_bias_ptr, act_method,
+        dropout1_out->data<T>(), dropout1_mask->data<uint8_t>());
     framework::Tensor linear2_out;
-    {
-      linear2_out.Resize({bsz_seq, d_model});
-      linear2_out.mutable_data<T>(place);
-      MatMul(ctx, *dropout1_out, linear2_weight, &linear2_out);
-    }
-    {
-      if (!normalize_pre_or_post) {
-        fused_dropout_layernorm_helper.LayernormResidualDropoutBias(
-            ctx, linear2_out.data<T>(), x.data<T>(), linear2_bias_ptr,
-            ln2_scale_ptr, ln2_bias_ptr, dropout2_out->data<T>(),
-            dropout2_mask->data<uint8_t>(), out->data<T>(), ln2_mean->data<U>(),
-            ln2_variance->data<U>());
-      } else {
-        fused_dropout_layernorm_helper.ResidualDropoutBias(
-            ctx, linear2_out.data<T>(), x.data<T>(), linear2_bias_ptr,
-            out->data<T>(), dropout2_mask->data<uint8_t>());
-      }
+    linear2_out.mutable_data<T>({bsz_seq, d_model}, place);
+    MatMul(ctx, *dropout1_out, linear2_weight, &linear2_out);
+    if (!normalize_pre_or_post) {
+      fused_dropout_layernorm_helper.LayernormResidualDropoutBias(
+          ctx, linear2_out.data<T>(), x.data<T>(), linear2_bias_ptr,
+          ln2_scale_ptr, ln2_bias_ptr, dropout2_out->data<T>(),
+          dropout2_mask->data<uint8_t>(), out->data<T>(), ln2_mean->data<U>(),
+          ln2_variance->data<U>());
+    } else {
+      fused_dropout_layernorm_helper.ResidualDropoutBias(
+          ctx, linear2_out.data<T>(), x.data<T>(), linear2_bias_ptr,
+          out->data<T>(), dropout2_mask->data<uint8_t>());
     }
   }
 
@@ -251,12 +244,9 @@ class FusedFfnGradKernel : public framework::OpKernel<T> {
     U* d_ln2_beta_ptr = d_ln2_beta == nullptr ? nullptr : d_ln2_beta->data<U>();
 
     framework::Tensor d_linear2_out, d_dropout2_out, d_residual;
-    d_linear2_out.Resize({bsz_seq, d_model});
-    d_linear2_out.mutable_data<T>(place);
-    d_dropout2_out.Resize({bsz_seq, d_model});
-    d_dropout2_out.mutable_data<T>(place);
-    d_residual.Resize({bsz_seq, d_model});
-    d_residual.mutable_data<T>(place);
+    d_linear2_out.mutable_data<T>({bsz_seq, d_model}, place);
+    d_dropout2_out.mutable_data<T>({bsz_seq, d_model}, place);
+    d_residual.mutable_data<T>({bsz_seq, d_model}, place);
 
     if (normalize_pre_or_post) {
       fused_dropout_layernorm_helper.ResidualDropoutBiasGrad(
@@ -272,14 +262,12 @@ class FusedFfnGradKernel : public framework::OpKernel<T> {
     }
 
     framework::Tensor d_dropout1_out;
-    d_dropout1_out.Resize({bsz_seq, dim_feedforward});
-    d_dropout1_out.mutable_data<T>(place);
+    d_dropout1_out.mutable_data<T>({bsz_seq, dim_feedforward}, place);
     MatMulGrad(ctx, d_linear2_out, dropout1_out, linear2_weight,
                &d_dropout1_out, d_linear2_weight);
 
     framework::Tensor d_linear1_out;
-    d_linear1_out.Resize({bsz_seq, dim_feedforward});
-    d_linear1_out.mutable_data<T>(place);
+    d_linear1_out.mutable_data<T>({bsz_seq, dim_feedforward}, place);
     fused_act_dropout_helper.DropoutActBiasGrad(
         ctx, d_dropout1_out.data<T>(), linear1_out.data<T>(), linear1_bias_ptr,
         dropout1_mask.data<uint8_t>(), d_linear1_out.data<T>(),
@@ -287,8 +275,7 @@ class FusedFfnGradKernel : public framework::OpKernel<T> {
 
     if (normalize_pre_or_post) {
       framework::Tensor d_ln1_out;
-      d_ln1_out.Resize({bsz_seq, d_model});
-      d_ln1_out.mutable_data<T>(place);
+      d_ln1_out.mutable_data<T>({bsz_seq, d_model}, place);
       MatMulGrad(ctx, d_linear1_out, ln1_out, linear1_weight, &d_ln1_out,
                  d_linear1_weight);
 
