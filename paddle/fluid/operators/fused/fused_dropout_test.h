@@ -25,6 +25,7 @@ limitations under the License. */
 #include "paddle/fluid/memory/memory.h"
 #include "paddle/fluid/operators/layer_norm_kernel.cu.h"
 
+
 #include "paddle/fluid/operators/math/math_function.h"
 #include "paddle/fluid/string/printf.h"
 
