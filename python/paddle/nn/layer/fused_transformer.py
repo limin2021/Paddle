@@ -16,6 +16,8 @@ import copy
 from .. import functional as F
 from paddle.nn import Layer
 from ...framework import ParamAttr
+import paddle
+from ...fluid.data_feeder import convert_dtype
 from ..initializer import Constant
 
 import collections
@@ -67,6 +69,35 @@ def _convert_param_attr_to_list(param_attr, n):
     return param_attrs
 
 
+def _convert_attention_mask(attn_mask, dtype):
+    """
+    Convert the attention mask to the target dtype we expect.
+
+    Parameters:
+        attn_mask (Tensor, optional): A tensor used in multi-head attention
+                to prevents attention to some unwanted positions, usually the
+                paddings or the subsequent positions. It is a tensor with shape
+                broadcasted to `[batch_size, n_head, sequence_length, sequence_length]`.
+                When the data type is bool, the unwanted positions have `False`
+                values and the others have `True` values. When the data type is
+                int, the unwanted positions have 0 values and the others have 1
+                values. When the data type is float, the unwanted positions have
+                `-INF` values and the others have 0 values. It can be None when
+                nothing wanted or needed to be prevented attention to. Default None.
+        dtype (VarType): The target type of `attn_mask` we expect.
+
+    Returns:
+        Tensor: A Tensor with shape same as input `attn_mask`, with data type `dtype`.
+    """
+    if attn_mask is not None and attn_mask.dtype != dtype:
+        attn_mask_dtype = convert_dtype(attn_mask.dtype)
+        if attn_mask_dtype == 'bool' or 'int' in attn_mask_dtype:
+            attn_mask = (paddle.cast(attn_mask, dtype) - 1.0) * 1e9
+        else:
+            attn_mask = paddle.cast(attn_mask, dtype)
+    return attn_mask
+
+
 class FusedMultiHeadAttention(Layer):
     """
     Attention mapps queries and a set of key-value pairs to outputs, and
@@ -109,20 +140,78 @@ class FusedMultiHeadAttention(Layer):
             output = multi_head_attn(query, None, None, attn_mask=attn_mask)  # [2, 4, 128]
     """
 
-    Cache = collections.namedtuple("Cache", ["k", "v"])
-    StaticCache = collections.namedtuple("StaticCache", ["k", "v"])
+    # todo(@limin)
+    # Cache = collections.namedtuple("Cache", ["k", "v"])
+    # StaticCache = collections.namedtuple("StaticCache", ["k", "v"])
 
     def __init__(self,
                  embed_dim,
                  num_heads,
                  dropout=0.,
+                 attn_dropout=0.,
                  kdim=None,
                  vdim=None,
+                 normalize_before=False,
                  need_weights=False,
                  weight_attr=None,
-                 bias_attr=None):
+                 bias_attr=None,
+                 name=None):
         super(FusedMultiHeadAttention, self).__init__()
-        raise NotImplementedError()
+
+        assert embed_dim > 0, ("Expected embed_dim to be greater than 0, "
+                               "but recieved {}".format(embed_dim))
+        assert num_heads > 0, ("Expected nhead to be greater than 0, "
+                               "but recieved {}".format(num_heads))
+
+        attn_dropout = dropout if attn_dropout is None else attn_dropout
+        self.normalize_before = normalize_before
+        self._dtype = self._helper.get_default_dtype()
+        self._weight_attr = weight_attr
+        self._bias_attr = bias_attr
+
+        self.head_dim = embed_dim // num_heads
+        assert self.head_dim * num_heads == embed_dim, "embed_dim must be divisible by num_heads"
+
+        ## linear parameters.
+        self.qkv_weight = self.create_parameter(
+            shape=[3, num_heads, self.head_dim, embed_dim],
+            attr=self._weight_attr,
+            dtype=self._dtype,
+            is_bias=False)
+        self.qkv_bias = self.create_parameter(
+            shape=[3, num_heads, self.head_dim],
+            attr=self._bias_attr,
+            dtype=self._dtype,
+            is_bias=True)
+        self.out_linear_weight = self.create_parameter(
+            shape=[embed_dim, embed_dim],
+            attr=self._weight_attr,
+            dtype=self._dtype,
+            is_bias=False)
+        self.out_linear_bias = self.create_parameter(
+            shape=[embed_dim],
+            attr=self._bias_attr,
+            dtype=self._dtype,
+            is_bias=True)
+
+        ## layer_norm parameters.
+        self.ln_scale = self.create_parameter(
+            attr=self._weight_attr,
+            shape=[embed_dim],
+            default_initializer=Constant(value=1.0))
+        self.ln_bias = self.create_parameter(
+            attr=self._bias_attr, shape=[embed_dim], is_bias=True)
+        self.ln_2_scale = self.create_parameter(
+            attr=self._weight_attr,
+            shape=[embed_dim],
+            default_initializer=Constant(value=1.0))
+        self.ln_2_bias = self.create_parameter(
+            attr=self._bias_attr, shape=[embed_dim], is_bias=True)
+        ## dropout parameters
+        self.dropout = dropout
+        self.attn_dropout = attn_dropout
+
+        self.name = name
 
     def forward(self, query, key=None, value=None, attn_mask=None, cache=None):
         """
@@ -132,14 +221,6 @@ class FusedMultiHeadAttention(Layer):
             query (Tensor): The queries for multi-head attention. It is a
                 tensor with shape `[batch_size, query_length, embed_dim]`. The
                 data type should be float32 or float64.
-            key (Tensor, optional): The keys for multi-head attention. It is
-                a tensor with shape `[batch_size, key_length, kdim]`. The
-                data type should be float32 or float64. If None, use `query` as
-                `key`. Default None.
-            value (Tensor, optional): The values for multi-head attention. It
-                is a tensor with shape `[batch_size, value_length, vdim]`.
-                The data type should be float32 or float64. If None, use `query` as
-                `value`. Default None.
             attn_mask (Tensor, optional): A tensor used in multi-head attention
                 to prevents attention to some unwanted positions, usually the
                 paddings or the subsequent positions. It is a tensor with shape
@@ -174,7 +255,26 @@ class FusedMultiHeadAttention(Layer):
                 reserves tensors concatanating raw tensors with intermediate \
                 results of current query.
         """
-        raise NotImplementedError()
+        if attn_mask is not None:
+            # Support bool or int mask
+            attn_mask = _convert_attention_mask(attn_mask, query.dtype)
+        out = F.fused_multihead_attention(
+            x=query,
+            qkv_weight=self.qkv_weight,
+            out_linear_weight=self.out_linear_weight,
+            pre_layer_norm=self.normalize_before,
+            ln_scale=self.ln_scale,
+            ln_bias=self.ln_bias,
+            ln_2_scale=self.ln_2_scale,
+            ln_2_bias=self.ln_2_bias,
+            epsilon=1e-05,
+            qkv_bias=self.qkv_bias,
+            out_linear_bias=self.out_linear_bias,
+            src_mask=attn_mask,
+            dropout=self.dropout,
+            attn_dropout=self.attn_dropout,
+            ln2_epsilon=1e-05)
+        return out
 
 
 class FusedFeedForward(Layer):
