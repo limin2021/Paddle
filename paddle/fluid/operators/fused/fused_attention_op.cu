@@ -99,8 +99,6 @@ class FusedAttentionOpKernel : public framework::OpKernel<T> {
 
 #if 1
     float attn_dropout_prob = ctx.Attr<float>("attn_dropout_prob");
-    std::cout << "limin: attn_dropout_prob = " << attn_dropout_prob
-              << std::endl;
     bool is_test_1 = ctx.Attr<bool>("is_test1");
     auto &dropout_implementation_1 =
         ctx.Attr<std::string>("dropout_implementation1");
