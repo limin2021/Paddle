@@ -17,6 +17,7 @@ register_operators(EXCLUDES
     fusion_lstm_op
     fused_bn_add_activation_op
     fused_transformer_op
+    fused_ffn_op
     fused_attention_op)
 
 # fusion_gru_op does not have CUDA kernel
