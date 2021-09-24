@@ -73,18 +73,32 @@ class FusedMultiHeadAttention(Layer):
     Multi-Head Attention performs multiple parallel attention to jointly attending
     to information from different representation subspaces.
     Please refer to `Attention Is All You Need <https://arxiv.org/pdf/1706.03762.pdf>`_
-    for more details.
+    for more details. 
+    Compared with MultiHeadAttention Layer, this API has these differences:
+    1. On basis of multi-head attention module defined in MultiHeadAttention Layer, 
+       FusedMultiHeadAttention includes layer_norm op if normalize_before is true in 
+       front of multi-head attention module, and includes dropout, residual add and 
+       layer_norm ops after multi-head attention module.
+    2. To reduce the overhead of framework scheduling, despite of constructing by 
+       mulitple individual python Layers or functions like MultiHeadAttention Layer, 
+       the FusedMultiHeadAttention is implemented by directly calling only one c++ op.
+    3. This API only support self-attention, i.e., query=key=value. Now it does not 
+       supported cross-attention cases. 
     Parameters:
         embed_dim (int): The expected feature size in the input and output.
         num_heads (int): The number of heads in multi-head attention.
-        dropout (float, optional): The dropout probability used on attention
+        dropout (float, optional): The dropout probability used after attention module 
+            to drop some targets. 0 for no dropout. Default 0
+        attn_dropout (float, optional): The dropout probability used on attention
             weights to drop some attention targets. 0 for no dropout. Default 0
         kdim (int, optional): The feature size in key. If None, assumed equal to
             `embed_dim`. Default None.
         vdim (int, optional): The feature size in value. If None, assumed equal to
             `embed_dim`. Default None.
+        normalize_before (bool, optional): Indicate whether do layer_norm before 
+            multi-head attention. Default False.
         need_weights (bool, optional): Indicate whether to return the attention
-            weights. Default False.
+            weights. Default False. 
         weight_attr(ParamAttr, optional):  To specify the weight parameter property.
             Default: None, which means the default weight parameter property is used.
             See usage for details in :code:`ParamAttr` .
@@ -95,12 +109,13 @@ class FusedMultiHeadAttention(Layer):
     Examples:
         .. code-block:: python
             import paddle
+
             # encoder input: [batch_size, sequence_length, d_model]
             query = paddle.rand((2, 4, 128))
             # self attention mask: [batch_size, num_heads, query_len, query_len]
             attn_mask = paddle.rand((2, 2, 4, 4))
-            multi_head_attn = paddle.nn.MultiHeadAttention(128, 2)
-            output = multi_head_attn(query, None, None, attn_mask=attn_mask)  # [2, 4, 128]
+            fused_multi_head_attn = paddle.nn.FusedMultiHeadAttention(128, 2)
+            output = fused_multi_head_attn(query, None, None, attn_mask=attn_mask)  # [2, 4, 128]
     """
 
     # todo(@limin)
@@ -178,12 +193,14 @@ class FusedMultiHeadAttention(Layer):
 
     def forward(self, query, key=None, value=None, attn_mask=None, cache=None):
         """
-        Applies multi-head attention to map queries and a set of key-value pairs
+        Applies fused multi-head attention to map queries and a set of key-value pairs
         to outputs.
         Parameters:
             query (Tensor): The queries for multi-head attention. It is a
                 tensor with shape `[batch_size, query_length, embed_dim]`. The
                 data type should be float32 or float64.
+            key (Tensor): None or the same as query.
+            value (Tensor): None or the same as query.
             attn_mask (Tensor, optional): A tensor used in multi-head attention
                 to prevents attention to some unwanted positions, usually the
                 paddings or the subsequent positions. It is a tensor with shape
@@ -194,29 +211,11 @@ class FusedMultiHeadAttention(Layer):
                 values. When the data type is float, the unwanted positions have
                 `-INF` values and the others have 0 values. It can be None when
                 nothing wanted or needed to be prevented attention to. Default None.
-            cache (MultiHeadAttention.Cache|MultiHeadAttention.StaticCache, optional):
-                It is a namedtuple with `k` and `v` as fields, and stores tensors
-                shaped `[batch_size, num_heads, length, embed_dim]` which are results
-                of linear projection, reshape and transpose calculations in
-                MultiHeadAttention. If it is an instance of `Cache`, `k` and `v`
-                fields reserve intermediate results of previous positions, which
-                mostly used for decoder self attention. If it is an instance of
-                `StaticCache`, `key` and `value` args would be ignored, `k` and
-                `v` fields would be used as calculated results on `key` and
-                `value`, which mostly used for decoder-encoder cross attention.
-                It is only used for inference and should be None for training.
-                Default None.
+            cache (optional):
+                None. 
         Returns:
             Tensor|tuple: It is a tensor that has the same shape and data type \
-                as `query`, representing attention output. Or a tuple if \
-                `need_weights` is True or `cache` is not None. If `need_weights` \
-                is True, except for attention output, the tuple also includes \
-                the attention weights tensor shaped `[batch_size, num_heads, query_length, key_length]`. \
-                If `cache` is not None, the tuple then includes the new cache \
-                having the same type as `cache`, and if it is `StaticCache`, it \
-                is same as the input `cache`, if it is `Cache`, the new cache \
-                reserves tensors concatanating raw tensors with intermediate \
-                results of current query.
+                as `query`, representing attention output. 
         """
         if attn_mask is not None:
             # Support bool or int mask

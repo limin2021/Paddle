@@ -1519,6 +1519,113 @@ def fused_multihead_attention(x,
                               ln2_epsilon=1e-05,
                               name=None):
     r"""
+    Fused multi-head attention operator. For each input :math:`X` ,
+    the equation is:
+
+    .. math::
+
+        if (pre_layer_norm)
+            ln_out = layer_norm(X)
+            qkv_out = ln_out * qkv_weight + qkv_bias
+        else
+            qkv_out = ln_out * qkv_weight + qkv_bias
+        xxx
+       
+        transpose_out = transpose(out_linear_out, perm=[2, 0, 1, 3, 4])
+        q_len = batch_size * seq_len * num_head * head_dim
+        q = transpose_out
+        k = q + q_len
+        v = k + q_len
+        qk_out = q * (k^t)
+        if (src_mask) 
+            src_mask_out = qk_out + src_mask
+            softmax_out = softmax(src_mask_out)
+        else
+            softmax_out = softmax(qk_out)
+        dropout_out = dropout(softmax_out)
+        qktv_out = dropout_out * v
+        transpose_out = transpose(qktv_out, perm=[0, 2, 1, 3])
+        out_linear_out = transpose_out * out_linear_weight + out_linear_bias
+        dropout_out = dropout(out_linear_out)
+        residual_out = residual + dropout_out
+        Out = layer_norm(residual_out)
+
+    Parameters:
+        x (Tensor): Input tensor. The shape is :math:`[batch\_size, sequence\_len, embed\_dim]`. 
+                    The data type should be float16, float32 or float64.
+        qkv_weight (Tensor): Weight tensor. The shape is :math:`[3, num\_head, dim\_head, dim\_embed]`.
+                    The data type should be float16, float32 or float64.
+        out_linear_weight (Tensor): Weight tensor. The shape is :math:`[3, num\_head, dim\_head, dim\_embed]`.
+                    The data type should be float16, float32 or float64.
+        pre_layer_norm (bool, optional) Indicate whether to put layer normalization
+            into preprocessing of MHA and FFN sub-layers. If True, pre-process is layer
+            normalization and post-precess includes dropout, residual connection.
+            Otherwise, no pre-process. Default False.
+        ln_scale(Tensor, optional): The weight tensor of pre layer_norm. The shape is .
+                    Default: None.
+        ln_bias(Tensor, optional): The bias tensor of per layer_norm. The shape is .
+                    Default: None.
+        ln_2_scale(Tensor, optional): The weight tensor of the last layer_norm. The shape is .
+                    Default: None.
+        ln_2_bias(Tensor, optional): The bias tensor of the last layer_norm. The shape is .
+                    Default: None.
+        epsilon(float, optional): The small value added to the variance to prevent
+            division by zero used in pre layer-norm. Default: 1e-05.
+        qkv_bias (Tensor, optional): Bias tensor. The shape is [].
+                    The data type should be float16, float32 or float64.
+                    If it is set to None, no bias will be added to this output units.
+        out_linear_bias (Tensor, optional): Bias tensor. The shape is [].
+                    The data type should be float16, float32 or float64.
+                    If it is set to None, no bias will be added to this output units.
+        src_mask (Tensor, optional): A tensor used in multi-head attention
+                to prevents attention to some unwanted positions, usually the
+                paddings or the subsequent positions. It is a tensor with shape
+                broadcasted to `[batch_size, num_head, sequence_length, sequence_length]`.
+                When the data type is bool, the unwanted positions have `False` 
+                values and the others have `True` values. When the data type is 
+                int, the unwanted positions have 0 values and the others have 1 
+                values. When the data type is float, the unwanted positions have 
+                `-INF` values and the others have 0 values. It can be None when 
+                nothing wanted or needed to be prevented attention to. Default None.
+        dropout (float|int): Probability of setting units to zero for the last dropout. Default 0.5.
+        attn_dropout (float|int): Probability of setting units to zero for the attention dropout. Default 0.5.
+        ln2_epsilon(float, optional): The small value added to the variance to prevent
+            division by zero used in the second layer-norm. Default: 1e-05.
+        name (str, optional): Normally there is no need for user to set this parameter.
+                              For detailed information, please refer to :ref:`api_guide_Name` .
+
+    Returns:
+        Tensor, the shape is :math:`[batch\_size, seq\_len, embed\_dim]` and the
+        data type is the same with input :math:`x` .
+
+    Examples:
+        .. code-block:: python
+          
+          import paddle
+          import numpy as np
+          
+          np.random.seed(123)
+          x = np.random.random(size=(3, 2, 4)).astype('float32')
+          qkv_weight = paddle.full(shape=[3, 1, 4, 4], fill_value="0.5", dtype="float32", name="qkv_weight")
+          qkv_bias = paddle.ones(shape=[4], dtype="float32", name="qkv_bias")
+          out_linear_weight = paddle.full(shape=[3, 1, 4, 4], fill_value="0.5", dtype="float32", name="qkv_weight")
+          out_linear_bias = paddle.ones(shape=[4], dtype="float32", name="qkv_bias")
+          y = paddle.nn.functional.fused_multihead_attention(x,
+                                                            qkv_weight,
+                                                            out_linear_weight,
+                                                            pre_layer_norm=False,
+                                                            ln_scale=None,
+                                                            ln_bias=None,
+                                                            ln_2_scale=None,
+                                                            ln_2_bias=None,
+                                                            epsilon=1e-05,
+                                                            qkv_bias,
+                                                            out_linear_bias,
+                                                            src_mask,
+                                                            dropout=0.,
+                                                            attn_dropout=0.,
+                                                            ln2_epsilon=1e-05)
+          print(y)
     """
     if in_dygraph_mode():
         ln_mean, ln_variance, ln_out, qkv_out, qkv_bias_out, transpose_out_2, qk_out, qktv_out, softmax_out, attn_dropout_mask_out, attn_dropout_out, src_mask_out, fmha_out, out_linear_out, dropout_mask_out, ln2_mean_out, ln2_var_out, bias_dropout_residual_out, final_out = _C_ops.fused_attention(
