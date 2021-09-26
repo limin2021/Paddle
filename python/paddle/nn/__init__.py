@@ -278,6 +278,7 @@ __all__ = [     #noqa
            'HSigmoidLoss',
            'PReLU',
            'TransformerEncoderLayer',
+           'FusedTransformerEncoderLayer',
            'AvgPool3D',
            'MaxPool2D',
            'MarginRankingLoss',

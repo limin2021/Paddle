@@ -129,7 +129,8 @@ class FusedAttentionOpKernel : public framework::OpKernel<T> {
     auto *qkv_bias_out_data = qkv_bias_out->mutable_data<T>(ctx.GetPlace());
 
     // get data ptr for FMHA.
-    auto *src_mask_data = (src_mask == nullptr ? nullptr : src_mask->data<T>());
+    // auto *src_mask_data = (src_mask == nullptr ? nullptr :
+    // src_mask->data<T>());
     auto *transpose_out_2_data =
         transpose_out_2->mutable_data<T>(ctx.GetPlace());
     auto *qk_out_data = qk_out->mutable_data<T>(ctx.GetPlace());
@@ -285,7 +286,8 @@ class FusedAttentionGradKernel : public framework::OpKernel<T> {
     auto *qkv_bias = ctx.Input<Tensor>("QKVBias");
     auto *out_linear_weight = ctx.Input<Tensor>("OutLinearW");
     auto *out_linear_bias = ctx.Input<Tensor>("OutLinearBias");
-    auto *src_mask_data = (src_mask == nullptr ? nullptr : src_mask->data<T>());
+    // auto *src_mask_data = (src_mask == nullptr ? nullptr :
+    // src_mask->data<T>());
     auto *qkv_weight_data = qkv_weight->data<T>();
     auto *qkv_bias_data = qkv_bias->data<T>();
     auto *out_linear_weight_data = out_linear_weight->data<T>();
