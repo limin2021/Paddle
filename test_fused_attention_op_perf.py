@@ -27,12 +27,13 @@ import unittest
 import time
 
 x_type = np.float32
-
+print("x_type is ", x_type)
 attn_mask_type = np.float64
 pre_layer_norm = True
 training = True
 
-batch_size = 32
+batch_size = 64
+print("batch_size is ", batch_size)
 query_length = 128
 head_dim = 64
 num_heads = 16
@@ -69,6 +70,7 @@ norm2 = LayerNorm(embed_dim)
 paddle.set_default_dtype(x_type)
 dropout = Dropout(dropout_prob, mode="upscale_in_train")
 
+iters = 10000
 
 def GetBaselineOut(tensor_query, tensor_attn_mask, residual):
     # paddle.disable_static(place=paddle.CUDAPlace(0))
@@ -133,7 +135,7 @@ def GetBaselineOut(tensor_query, tensor_attn_mask, residual):
     # time_end = time.time()
     # all_time = time_end - time_start
     # print("baseline time is ", all_time)
-    # #return final_out, tensor_query.grad
+    #return final_out, tensor_query.grad
     return final_out
 
 
@@ -145,16 +147,17 @@ def TestBaselinePerf():
 
     final_out = GetBaselineOut(tensor_query, tensor_attn_mask, residual)
 
-    print("x_type is ", x_type)
+    
     paddle.device.cuda.synchronize(paddle.CUDAPlace(0))
     time_start = time.time()
-    for i in range(10000):
+    for i in range(iters):
         final_out = GetBaselineOut(tensor_query, tensor_attn_mask, residual)
     paddle.device.cuda.synchronize(paddle.CUDAPlace(0))
     time_end = time.time()
     all_time = time_end - time_start
     print("baseline time is ", all_time)
     #return final_out, tensor_query.grad
+    #return final_out, x_grad
     return final_out
 
 
@@ -199,10 +202,12 @@ def TestFusedAttentionPerf():
         ln1_bias, ln2_scale, ln2_bias, epsilon, qkv_bias_tensor,
         out_linear_bias, tensor_attn_mask, dropout_prob, attn_dropout_prob,
         ln2_epsilon)
+    # paddle.autograd.backward(
+    #     [final_out], [paddle.to_tensor(dout)], retain_graph=True)
 
     paddle.device.cuda.synchronize(paddle.CUDAPlace(0))
     time_start = time.time()
-    for i in range(10000):
+    for i in range(iters):
         final_out = F.fused_multihead_attention(
             x, qkv_weight_tensor, out_linear_weight, pre_layer_norm, ln1_scale,
             ln1_bias, ln2_scale, ln2_bias, epsilon, qkv_bias_tensor,
