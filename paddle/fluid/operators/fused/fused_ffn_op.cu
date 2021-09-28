@@ -26,6 +26,33 @@ limitations under the License. */
 namespace paddle {
 namespace operators {
 
+static int get_size(const framework::DDim& dim) {
+  int size = 1;
+  for (int i = 0; i < dim.size(); i++) {
+    size *= dim[i];
+  }
+  return size;
+}
+template <typename T>
+static void save_to_file(const char* path, const framework::Tensor* data) {
+  int size = get_size(data->dims());
+  T* h_data = new T[size];
+  cudaMemcpy(h_data, data->data<T>(), size * sizeof(T), cudaMemcpyDeviceToHost);
+  FILE* fp = fopen(path, "a+");
+  for (int i = 0; i < size; i++) {
+    if (!isfinite(h_data[i])) {
+      printf("%s %f is not finite\n", path, static_cast<float>(h_data[i]));
+      break;
+    }
+    // fprintf(fp, "%f ", static_cast<float>(h_data[i]));
+    // if(i != 0 && i % 100 == 0){
+    //     fprintf(fp, "\n");
+    //}
+  }
+  fprintf(fp, "\n\n");
+  fclose(fp);
+}
+
 using Tensor = framework::Tensor;
 
 template <typename DeviceContext, typename T>
@@ -111,15 +138,26 @@ class FusedFfnKernel : public framework::OpKernel<T> {
   }
 
   void Compute(const framework::ExecutionContext& context) const override {
+    using U = LayerNormParamType<T>;
     auto x = context.Input<framework::Tensor>("X");
+    save_to_file<T>("/home/zhangkaihuo/ffn_in.txt", x);
+
     auto linear1_weight = context.Input<framework::Tensor>("Linear1Weight");
+    save_to_file<T>("/home/zhangkaihuo/ffn_linear1Weight.txt", linear1_weight);
     auto linear1_bias = context.Input<framework::Tensor>("Linear1Bias");
+    save_to_file<T>("/home/zhangkaihuo/ffn_linear1Bias.txt", linear1_bias);
     auto linear2_weight = context.Input<framework::Tensor>("Linear2Weight");
+    save_to_file<T>("/home/zhangkaihuo/ffn_linear2weight.txt", linear2_weight);
     auto linear2_bias = context.Input<framework::Tensor>("Linear2Bias");
+    save_to_file<T>("/home/zhangkaihuo/ffn_linear2bias.txt", linear2_bias);
     auto ln1_scale = context.Input<framework::Tensor>("Ln1Scale");
+    save_to_file<U>("/home/zhangkaihuo/ffn_ln1scale.txt", ln1_scale);
     auto ln1_bias = context.Input<framework::Tensor>("Ln1Bias");
+    save_to_file<U>("/home/zhangkaihuo/ffn_ln1bias.txt", ln1_bias);
     auto ln2_scale = context.Input<framework::Tensor>("Ln2Scale");
+    save_to_file<U>("/home/zhangkaihuo/ffn_ln2scal.txt", ln2_scale);
     auto ln2_bias = context.Input<framework::Tensor>("Ln2Bias");
+    save_to_file<U>("/home/zhangkaihuo/ffn_ln2bias.txt", ln2_bias);
 
     auto ln1_mean = context.Output<framework::Tensor>("Ln1Mean");
     auto ln1_variance = context.Output<framework::Tensor>("Ln1Variance");
@@ -142,7 +180,6 @@ class FusedFfnKernel : public framework::OpKernel<T> {
     DropoutParam dropout_param1(context, 1);
     DropoutParam dropout_param2(context, 2);
 
-    using U = LayerNormParamType<T>;
     auto place = context.GetPlace();
     out->mutable_data<T>(place);
     dropout1_mask->mutable_data<uint8_t>(place);
@@ -171,6 +208,12 @@ class FusedFfnKernel : public framework::OpKernel<T> {
         linear1_out, ln1_out, dropout1_out, dropout2_out, bsz_seq, d_model,
         dim_feedforward, act_method, normalize_pre_or_post, epsilon1, epsilon2,
         dropout_param1, dropout_param2, context.cuda_device_context());
+
+    save_to_file<T>("/home/zhangkaihuo/ffn_out.txt", out);
+    save_to_file<U>("/home/zhangkaihuo/ffn_ln1_mean.txt", ln1_mean);
+    save_to_file<U>("/home/zhangkaihuo/ffn_ln1_mean.txt", ln1_variance);
+    save_to_file<U>("/home/zhangkaihuo/ffn_ln1_mean.txt", ln2_mean);
+    save_to_file<U>("/home/zhangkaihuo/ffn_ln1_mean.txt", ln2_mean);
   }
 };
 
@@ -292,6 +335,9 @@ class FusedFfnGradKernel : public framework::OpKernel<T> {
     using U = LayerNormParamType<T>;
     auto d_out =
         *context.Input<framework::Tensor>(framework::GradVarName("Out"));
+
+    save_to_file<T>("/home/zhangkaihuo/ffn_grad_in.txt", &d_out);
+
     auto x = *context.Input<framework::Tensor>("X");
     auto dropout1_mask = *context.Input<framework::Tensor>("Dropout1Mask");
     auto dropout2_mask = *context.Input<framework::Tensor>("Dropout2Mask");
@@ -378,6 +424,7 @@ class FusedFfnGradKernel : public framework::OpKernel<T> {
             dim_feedforward, dropout_param1, dropout_param2, act_method,
             normalize_pre_or_post, epsilon1, epsilon2,
             context.cuda_device_context());
+    save_to_file<T>("/home/zhangkaihuo/ffn_grad_out.txt", d_x);
   }
 };
 

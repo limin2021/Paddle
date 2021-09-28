@@ -23,6 +23,15 @@ from ..initializer import Constant
 import collections
 
 
+def save_to_file(path, data):
+    max_len = 10
+    max_len = min(max_len, len(data))
+    f1 = open(path, 'w')
+    for i in range(max_len):
+        f1.write(str(data[i]) + '\n')
+    f1.close()
+
+
 def _convert_param_attr_to_list(param_attr, n):
     """
     If `param_attr` is a list or tuple, convert every element in it to a
@@ -196,17 +205,17 @@ class FusedMultiHeadAttention(Layer):
 
         ## layer_norm parameters.
         self.ln_scale = self.create_parameter(
-            attr=self._weight_attr,
+            attr=None,
             shape=[embed_dim],
             default_initializer=Constant(value=1.0))
         self.ln_bias = self.create_parameter(
-            attr=self._bias_attr, shape=[embed_dim], is_bias=True)
+            attr=None, shape=[embed_dim], is_bias=True)
         self.ln_2_scale = self.create_parameter(
-            attr=self._weight_attr,
+            attr=None,
             shape=[embed_dim],
             default_initializer=Constant(value=1.0))
         self.ln_2_bias = self.create_parameter(
-            attr=self._bias_attr, shape=[embed_dim], is_bias=True)
+            attr=None, shape=[embed_dim], is_bias=True)
         ## dropout parameters
         self.dropout = dropout
         self.attn_dropout = attn_dropout
@@ -325,19 +334,19 @@ class FusedFeedForward(Layer):
 
         self._ln1_scale = self.create_parameter(
             shape=[d_model],
-            attr=weight_attr,
+            attr=None,
             is_bias=False,
             default_initializer=Constant(1.0))
         self._ln1_bias = self.create_parameter(
-            shape=[d_model], attr=bias_attr, is_bias=True)
+            shape=[d_model], attr=None, is_bias=True)
 
         self._ln2_scale = self.create_parameter(
             shape=[d_model],
-            attr=weight_attr,
+            attr=None,
             is_bias=False,
             default_initializer=Constant(1.0))
         self._ln2_bias = self.create_parameter(
-            shape=[d_model], attr=bias_attr, is_bias=True)
+            shape=[d_model], attr=None, is_bias=True)
 
     def forward(self, src, cache=None):
         out = F.fused_ffn(src, self._linear1_weight, self._linear2_weight,
@@ -481,6 +490,7 @@ class FusedTransformerEncoderLayer(Layer):
                 incremental length. See `MultiHeadAttention.gen_cache` and \
                 `MultiHeadAttention.forward` for more details.
         """
+
         src_mask = _convert_attention_mask(src_mask, src.dtype)
         if cache is None:
             attn_out = self.fused_attn(src, attn_mask=src_mask)
@@ -489,6 +499,7 @@ class FusedTransformerEncoderLayer(Layer):
                 src, attn_mask=src_mask, cache=cache)
 
         ffn_out = self.ffn(attn_out)
+
         return ffn_out if cache is None else (ffn_out, incremental_cache)
 
 

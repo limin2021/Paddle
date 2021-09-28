@@ -86,7 +86,7 @@ def compute_reference(pre_layer_norm, query, attn_mask, ln_scale, ln_bias,
 
     num_head = qkv_weight.shape[1]
     head_dim = qkv_weight.shape[2]
-    # 
+    #
     qkv_weight = qkv_weight.transpose(
         (3, 0, 1, 2))  # embed_dim, 3, num_heads, self.head_dim
     qkv_weight = qkv_weight.reshape(qkv_weight.shape[0], qkv_weight.shape[1] *
@@ -110,7 +110,7 @@ def compute_reference(pre_layer_norm, query, attn_mask, ln_scale, ln_bias,
 
     q = qkv[0:1, ::]
     q = q.reshape(batch_size, num_head, seq_len, head_dim)
-    k = qkv[1:2, ::]  #[1, batch_size, num_head, seq_len, head_dim] 
+    k = qkv[1:2, ::]  #[1, batch_size, num_head, seq_len, head_dim]
     k = k.reshape(batch_size, num_head, seq_len, head_dim)
     v = qkv[2::]
     v = v.reshape(batch_size, num_head, seq_len, head_dim)

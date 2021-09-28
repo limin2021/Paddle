@@ -47,12 +47,40 @@ namespace operators {
 
 using Tensor = framework::Tensor;
 
+static int get_size(const framework::DDim &dim) {
+  int size = 1;
+  for (int i = 0; i < dim.size(); i++) {
+    size *= dim[i];
+  }
+  return size;
+}
+template <typename T>
+static void save_to_file(const char *path, const Tensor *data) {
+  int size = get_size(data->dims());
+  T *h_data = new T[size];
+  cudaMemcpy(h_data, data->data<T>(), size * sizeof(T), cudaMemcpyDeviceToHost);
+  FILE *fp = fopen(path, "a+");
+  for (int i = 0; i < size; i++) {
+    if (!isfinite(h_data[i])) {
+      printf("%s %f is not finite\n", path, static_cast<float>(h_data[i]));
+      break;
+    }
+    // fprintf(fp, "%f ", static_cast<float>(h_data[i]));
+    // if(i != 0 && i % 100 == 0){
+    //     fprintf(fp, "\n");
+    //}
+  }
+  fprintf(fp, "\n\n");
+  fclose(fp);
+}
+
 template <typename T>
 class FusedAttentionOpKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext &ctx) const override {
     using U = LayerNormParamType<T>;
     auto *input_x = ctx.Input<Tensor>("X");
+    save_to_file<T>("/home/zhangkaihuo/attn_in.txt", input_x);
 
     const auto pre_layer_norm = ctx.Attr<bool>("pre_layer_norm");
     const float epsilon = ctx.Attr<float>("epsilon");
@@ -238,6 +266,9 @@ class FusedAttentionOpKernel : public framework::OpKernel<T> {
         bias_dropout_residual_out_data, dropout_mask_out_data, final_out_data,
         ln_mean_2_data, ln_var_2_data);
 #endif
+    save_to_file<T>("/home/zhangkaihuo/attn_out.txt", out);
+    save_to_file<U>("/home/zhangkaihuo/attn_ln_mean2.txt", ln_mean_2);
+    save_to_file<U>("/home/zhangkaihuo/attn_ln_var2.txt", ln_var_2);
   }
 };
 
@@ -268,6 +299,7 @@ class FusedAttentionGradKernel : public framework::OpKernel<T> {
     auto *d_y = ctx.Input<Tensor>(framework::GradVarName("Y"));
     auto *d_y_data = d_y->data<T>();
 
+    save_to_file<T>("/home/zhangkaihuo/attn_grad_in.txt", d_y);
     // fw input
     auto *input_x = ctx.Input<Tensor>("X");
     auto *ln_scale = ctx.Input<Tensor>("LnScale");
@@ -510,6 +542,16 @@ class FusedAttentionGradKernel : public framework::OpKernel<T> {
         ctx.cuda_device_context(), ins, &outs, elewise_add_axis,
         AddFunctor<T>());
 #endif
+
+    save_to_file<T>("/home/zhangkaihuo/attn_grad_out.txt", d_x);
+    save_to_file<T>("/home/zhangkaihuo/attn_grad_qkv_w.txt", d_qkv_weight);
+    save_to_file<T>("/home/zhangkaihuo/attn_grad_qkv_b.txt", d_qkv_bias);
+    save_to_file<U>("/home/zhangkaihuo/attn_grad_lnscale.txt", d_ln_scale);
+    save_to_file<U>("/home/zhangkaihuo/attn_grad_lnbias.txt", d_ln_bias);
+    save_to_file<T>("/home/zhangkaihuo/attn_grad_linearw.txt",
+                    d_out_linear_weight);
+    save_to_file<T>("/home/zhangkaihuo/attn_grad_linearb.txt",
+                    d_out_linear_bias);
   }
 };
 
