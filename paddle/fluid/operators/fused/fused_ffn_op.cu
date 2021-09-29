@@ -425,6 +425,16 @@ class FusedFfnGradKernel : public framework::OpKernel<T> {
             normalize_pre_or_post, epsilon1, epsilon2,
             context.cuda_device_context());
     save_to_file<T>("/home/zhangkaihuo/ffn_grad_out.txt", d_x);
+    save_to_file<T>("/home/zhangkaihuo/ffn_grad_linear1w.txt",
+                    d_linear1_weight);
+    save_to_file<T>("/home/zhangkaihuo/ffn_grad_linear1b.txt", d_linear1_bias);
+    save_to_file<T>("/home/zhangkaihuo/ffn_grad_linear2w.txt",
+                    d_linear2_weight);
+    save_to_file<T>("/home/zhangkaihuo/ffn_grad_linear2b.txt", d_linear2_bias);
+    save_to_file<U>("/home/zhangkaihuo/ffn_grad_ln1w.txt", d_ln1_scale);
+    save_to_file<U>("/home/zhangkaihuo/ffn_grad_ln1b.txt", d_ln1_bias);
+    save_to_file<U>("/home/zhangkaihuo/ffn_grad_ln2w.txt", d_ln2_scale);
+    save_to_file<U>("/home/zhangkaihuo/ffn_grad_ln2b.txt", d_ln2_bias);
   }
 };
 
