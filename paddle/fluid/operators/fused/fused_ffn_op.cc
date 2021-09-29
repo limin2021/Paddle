@@ -295,7 +295,6 @@ class FusedFfnOpGradMaker : public framework::SingleGradOpMaker<T> {
     op->SetInput(framework::GradVarName("Out"), this->OutputGrad("Out"));
     op->SetInput("X", this->Input("X"));
     op->SetInput("Linear1Weight", this->Input("Linear1Weight"));
-    op->SetInput("Linear1Bias", this->Input("Linear1Bias"));
     op->SetInput("Linear2Weight", this->Input("Linear2Weight"));
     op->SetInput("Ln1Scale", this->Input("Ln1Scale"));
     op->SetInput("Ln1Bias", this->Input("Ln1Bias"));
@@ -323,10 +322,13 @@ class FusedFfnOpGradMaker : public framework::SingleGradOpMaker<T> {
                   this->InputGrad("Ln2Bias"));
     op->SetOutput(framework::GradVarName("Linear1Weight"),
                   this->InputGrad("Linear1Weight"));
-    op->SetOutput(framework::GradVarName("Linear1Bias"),
-                  this->InputGrad("Linear1Bias"));
     op->SetOutput(framework::GradVarName("Linear2Weight"),
                   this->InputGrad("Linear2Weight"));
+    if (this->HasInput("Linear1Bias")) {
+      op->SetInput("Linear1Bias", this->Input("Linear1Bias"));
+      op->SetOutput(framework::GradVarName("Linear1Bias"),
+                    this->InputGrad("Linear1Bias"));
+    }
     if (this->HasInput("Linear2Bias")) {
       op->SetInput("Linear2Bias", this->Input("Linear2Bias"));
       op->SetOutput(framework::GradVarName("Linear2Bias"),

@@ -168,8 +168,10 @@ def _insert_cast_op(block, op, idx, src_dtype, dest_dtype):
             ] and out_name != 'Y':
                 continue
 
-            if op.type in ['fused_attention', 'fused_ffn'
-                           ] and out_name not in ['Y', 'Out']:
+            if op.type in ['fused_attention', 'fused_ffn'] and out_name in [
+                    'LnMean', 'LnVariance', 'Ln2Mean', 'Ln2Variance', 'Ln1Mean',
+                    'Ln1Variance'
+            ]:
                 continue
             for out_var_name in op.output(out_name):
                 out_var = block.var(out_var_name)
