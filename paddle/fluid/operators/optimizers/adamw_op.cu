@@ -155,7 +155,6 @@ class AdamWOpCUDAKernel : public framework::OpKernel<T> {
                           ctx.InputNames("Param").front(),
                           framework::ToTypeName(param_var->Type())));
 
-    // printf("call AdamWOpCUDAKernel...\n");
     using paddle::framework::LoDTensor;
     using MPDType = typename details::MPTypeTrait<T>::Type;
 
@@ -185,7 +184,6 @@ class AdamWOpCUDAKernel : public framework::OpKernel<T> {
 
     bool skip_update = false;
     if (ctx.HasInput("SkipUpdate")) {
-      // printf("call skip update...\n");
       auto* skip_update_tensor = ctx.Input<framework::Tensor>("SkipUpdate");
       PADDLE_ENFORCE_EQ(skip_update_tensor->numel(), 1,
                         platform::errors::InvalidArgument(
@@ -200,7 +198,6 @@ class AdamWOpCUDAKernel : public framework::OpKernel<T> {
     // skip_update=true, just copy input to output, and TensorCopy will call
     // mutable_data
     if (skip_update) {
-      // printf("call skip update2...\n");
       VLOG(4) << "Adamw skip update";
       framework::TensorCopy(
           *param, ctx.GetPlace(),
@@ -225,13 +222,11 @@ class AdamWOpCUDAKernel : public framework::OpKernel<T> {
     // if with_decay = false, coeff = 0
     bool with_decay = ctx.Attr<bool>("with_decay");
     if (!with_decay) {
-      // printf("with decay...\n");
       coeff = static_cast<float>(0.0);
     }
 
     MPDType beta1 = static_cast<MPDType>(ctx.Attr<float>("beta1"));
     if (ctx.HasInput("Beta1Tensor")) {
-      // printf("Beta1Tensor...\n");
       auto* beta1_tensor = ctx.Input<framework::Tensor>("Beta1Tensor");
       PADDLE_ENFORCE_EQ(beta1_tensor->numel(), 1,
                         platform::errors::InvalidArgument(
@@ -241,7 +236,6 @@ class AdamWOpCUDAKernel : public framework::OpKernel<T> {
     }
     MPDType beta2 = static_cast<MPDType>(ctx.Attr<float>("beta2"));
     if (ctx.HasInput("Beta2Tensor")) {
-      // printf("Beta2Tensor...\n");
       auto* beta2_tensor = ctx.Input<framework::Tensor>("Beta2Tensor");
       PADDLE_ENFORCE_EQ(beta2_tensor->numel(), 1,
                         platform::errors::InvalidArgument(
@@ -251,7 +245,6 @@ class AdamWOpCUDAKernel : public framework::OpKernel<T> {
     }
     MPDType epsilon = static_cast<MPDType>(ctx.Attr<float>("epsilon"));
     if (ctx.HasInput("EpsilonTensor")) {
-      // printf("EpsilonTensor...\n");
       auto* epsilon_tensor = ctx.Input<framework::Tensor>("EpsilonTensor");
       PADDLE_ENFORCE_EQ(epsilon_tensor->numel(), 1,
                         platform::errors::InvalidArgument(
@@ -278,7 +271,6 @@ class AdamWOpCUDAKernel : public framework::OpKernel<T> {
     const LoDTensor* master_param = nullptr;
     LoDTensor* master_param_out = nullptr;
     if (multi_precision) {
-      // printf("multi_precision");
       bool has_master =
           ctx.HasInput("MasterParam") && ctx.HasOutput("MasterParamOut");
       PADDLE_ENFORCE_EQ(has_master, true,
@@ -307,7 +299,6 @@ class AdamWOpCUDAKernel : public framework::OpKernel<T> {
 
       if (beta1_pow->place() == platform::CPUPlace() &&
           beta2_pow->place() == platform::CPUPlace()) {
-        printf("call AdamWKernelREG\n");
         // Compute with betapow in REG
         AdamWKernelREG<T, MPDType><<<blocks, threads, 0, dev_ctx.stream()>>>(
             beta1, beta2, epsilon, coeff, lr_ratio, *beta1_pow->data<MPDType>(),
@@ -326,7 +317,6 @@ class AdamWOpCUDAKernel : public framework::OpKernel<T> {
               beta2 * beta2_pow->data<MPDType>()[0];
         }
       } else {
-        printf("call AdamWKernelMEM\n");
         AdamWKernelMEM<T, MPDType><<<blocks, threads, 0, dev_ctx.stream()>>>(
             beta1, beta2, epsilon, coeff, lr_ratio, beta1_pow->data<MPDType>(),
             beta2_pow->data<MPDType>(), mom1->data<MPDType>(),
@@ -346,7 +336,6 @@ class AdamWOpCUDAKernel : public framework::OpKernel<T> {
         }
       }
     } else if (grad_var->IsType<framework::SelectedRows>()) {
-      // printf("type is selectrows...\n");
       auto* grad = ctx.Input<framework::SelectedRows>("Grad");
       if (grad->rows().size() == 0) {
         VLOG(3) << "grad row size is 0!!";
