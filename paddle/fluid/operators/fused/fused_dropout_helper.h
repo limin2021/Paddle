@@ -15,16 +15,22 @@ limitations under the License. */
 #pragma once
 
 #include "paddle/fluid/framework/generator.h"
-#include "paddle/fluid/framework/tensor_util.h"
+#include "paddle/fluid/operators/dropout_impl_util.h"
 #include "paddle/fluid/operators/fused/fused_dropout_act_bias.h"
 #include "paddle/fluid/operators/fused/fused_layernorm_residual_dropout_bias.h"
 #include "paddle/fluid/operators/fused/fused_residual_dropout_bias.h"
 #include "paddle/fluid/operators/math/functors.h"
-#include "paddle/fluid/operators/math/math_function.h"
 
 namespace paddle {
 namespace operators {
 
+/**
+ * Support two Dropouts in the use senarieo.
+ * This warpper can be used in FFN op.
+ * The DropoutParam will be used in the fused_dropout_act_bias,
+ * fused_residual_dropout_bias(pre_layer_norm=ture) or
+ * fused_layernorm_residual_dropout_bias(pre_layer_norm=false).
+*/
 struct DropoutParam {
   uint64_t seed;
   float dropout_prob;
@@ -32,65 +38,58 @@ struct DropoutParam {
   bool is_test;
   bool fix_seed;
   int increment;
-  bool has_increment;
+  const framework::Tensor* tensor_seed;
+  int seed_val;
 
   DropoutParam() {
     fix_seed = false;
     seed = 0;
     is_test = false;
     is_upscale_in_train = false;
-    has_increment = false;
     dropout_prob = 0.5;
+    tensor_seed = nullptr;
+    seed_val = 0;
   }
 
   /**
-   * dropout_index: the index of dropout, such as FFN has two dropout,
-   * so the dropout_index will 1 or 2.
-   * the dropout param will defined as param1 or param2
+   * dropout_index: can be 0, 1, 2. 0 means there is only one dropout,
+   * 1 and 2 represent two dropout, the parameter name of dropout
+   * will be "dropout" + dropout_index + param name, such as dropout1_seed,
+   * dropout1_is_test.
    */
   DropoutParam(const framework::ExecutionContext& context,
                const int dropout_index) {
+    std::string pre_fix = "dropout";
     std::string str_index = std::to_string(dropout_index);
-    if (dropout_index == 0) {
-      str_index = "";
-    }
-    dropout_prob = context.Attr<float>("dropout_prob" + str_index);
-    auto& dropout_implementation =
-        context.Attr<std::string>("dropout_implementation" + str_index);
-    is_upscale_in_train = (dropout_implementation == "upscale_in_train");
-    is_test = context.Attr<bool>("is_test" + str_index);
-    fix_seed = context.Attr<bool>("fix_seed" + str_index);
-    has_increment = false;
-
-    std::string str_seed = "Seed" + str_index;
-    auto* tensor_seed =
-        context.HasInput(str_seed) ? context.Input<Tensor>(str_seed) : nullptr;
-    int device_id =
-        BOOST_GET_CONST(platform::CUDAPlace, context.GetPlace()).GetDeviceId();
-    auto gen_cuda = framework::GetDefaultCUDAGenerator(device_id);
-    if (tensor_seed && platform::is_gpu_place(tensor_seed->place())) {
-      framework::Tensor seed_cpu_tensor;
-      TensorCopySync(*tensor_seed, platform::CPUPlace(), &seed_cpu_tensor);
-      seed = static_cast<uint64_t>(seed_cpu_tensor.data<int>()[0]);
-    } else if (gen_cuda->GetIsInitPy() && !fix_seed) {
-      has_increment = true;
+    if (dropout_index > 0) {
+      pre_fix = pre_fix + str_index + "_";
     } else {
-      if (tensor_seed) {
-        seed = *(tensor_seed->data<int>());
-      } else {
-        std::random_device rnd;
-        seed = fix_seed ? context.Attr<int>("seed" + str_index) : rnd();
-      }
+      pre_fix = pre_fix + "_";
     }
+    dropout_prob = context.Attr<float>(pre_fix + "prob");
+    auto& dropout_implementation =
+        context.Attr<std::string>(pre_fix + "implementation");
+    is_upscale_in_train = (dropout_implementation == "upscale_in_train");
+    is_test = context.Attr<bool>(pre_fix + "is_test");
+    fix_seed = context.Attr<bool>(pre_fix + "fix_seed");
+
+    std::string str_seed = "Dropout";
+    if (dropout_index > 0) {
+      str_seed = str_seed + str_index + "Seed";
+    } else {
+      str_seed = str_seed + "Seed";
+    }
+    tensor_seed =
+        context.HasInput(str_seed) ? context.Input<Tensor>(str_seed) : nullptr;
+    seed_val = context.Attr<int>(pre_fix + "seed");
   }
+
   int UpdateSeedAndIncrement(const platform::CUDADeviceContext& ctx,
                              const int offset) {
-    int device_id =
-        BOOST_GET_CONST(platform::CUDAPlace, ctx.GetPlace()).GetDeviceId();
-    auto gen_cuda = framework::GetDefaultCUDAGenerator(device_id);
-    auto seed_offset = gen_cuda->IncrementOffset(offset);
-    seed = seed_offset.first;
-    increment = static_cast<int>(seed_offset.second);
+    uint64_t tmp_increment;
+    GetSeedDataAndIncrement(ctx, tensor_seed, fix_seed, seed_val, offset, &seed,
+                            &tmp_increment);
+    increment = static_cast<int>(tmp_increment);
     return increment;
   }
 };
@@ -108,9 +107,7 @@ class FusedDropoutHelper {
                                     config.block_per_grid.x * real_vec_size) +
                      1) *
                     real_vec_size;
-    if (dropout_param_.has_increment) {
-      increment = dropout_param_.UpdateSeedAndIncrement(ctx, increment);
-    }
+    increment = dropout_param_.UpdateSeedAndIncrement(ctx, increment);
     return increment;
   }
 
@@ -165,7 +162,7 @@ class FusedDropoutHelper {
           dropout_param_.is_test, src, bias, out, mask, ctx);
     } else {
       PADDLE_THROW(platform::errors::InvalidArgument(
-          "the activation only support gelu or relu!"));
+          "Currently only supports gelu or relu activation functions!"));
     }
   }
 
@@ -184,7 +181,7 @@ class FusedDropoutHelper {
           dropout_param_.is_upscale_in_train, rows_, cols_, d_src, d_bias, ctx);
     } else {
       PADDLE_THROW(platform::errors::InvalidArgument(
-          "the activation only support gelu or relu!"));
+          "Currently only supports gelu or relu activation functions!"));
     }
   }
 
@@ -226,10 +223,6 @@ class FusedDropoutLayerNormHelper : public FusedDropoutHelper<T, MaskType> {
           LayerNormForward<
               T, U, kBlockDim><<<this->rows_, kBlockDim, 0, ctx.stream()>>>(
               src, gamma, beta, out, mean, variance, epsilon_, this->cols_));
-      default:
-        PADDLE_THROW(platform::errors::InvalidArgument(
-            "Product from begin_norm_axis to end must be larger than 1"));
-        break;
     }
   }
 
@@ -256,12 +249,8 @@ class FusedDropoutLayerNormHelper : public FusedDropoutHelper<T, MaskType> {
       vec_size = 1;
     }
     int threads = GetDesiredBlockDim(this->cols_ / vec_size);
-
     int increment = ((this->cols_ - 1) / (threads * vec_size) + 1) * vec_size;
-    if (this->dropout_param_.has_increment) {
-      increment = this->dropout_param_.UpdateSeedAndIncrement(ctx, increment);
-    }
-
+    increment = this->dropout_param_.UpdateSeedAndIncrement(ctx, increment);
     LaunchLayernormResidualDropoutBias<T, MaskType>(
         this->rows_, this->cols_, increment, this->dropout_param_.seed,
         this->dropout_param_.dropout_prob, epsilon_,

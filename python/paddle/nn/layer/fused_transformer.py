@@ -23,15 +23,6 @@ from ..initializer import Constant
 import collections
 
 
-def save_to_file(path, data):
-    max_len = 10
-    max_len = min(max_len, len(data))
-    f1 = open(path, 'w')
-    for i in range(max_len):
-        f1.write(str(data[i]) + '\n')
-    f1.close()
-
-
 def _convert_param_attr_to_list(param_attr, n):
     """
     If `param_attr` is a list or tuple, convert every element in it to a
@@ -177,52 +168,66 @@ class FusedMultiHeadAttention(Layer):
         self._dtype = self._helper.get_default_dtype()
         self._weight_attr = weight_attr
         self._bias_attr = bias_attr
-
+        
+        self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         assert self.head_dim * num_heads == embed_dim, "embed_dim must be divisible by num_heads"
 
-        ## linear parameters.
-        self.qkv_weight = self.create_parameter(
-            shape=[3, num_heads, self.head_dim, embed_dim],
-            attr=self._weight_attr,
-            dtype=self._dtype,
-            is_bias=False)
-        self.qkv_bias = self.create_parameter(
-            shape=[3, num_heads, self.head_dim],
-            attr=self._bias_attr,
-            dtype=self._dtype,
-            is_bias=True)
-        self.out_linear_weight = self.create_parameter(
-            shape=[embed_dim, embed_dim],
-            attr=self._weight_attr,
-            dtype=self._dtype,
-            is_bias=False)
+        self.cudnn_version = paddle.get_cudnn_version()
+        print("cudnn_version = ")
+        print(self.cudnn_version)
+        if self.cudnn_version >= 8000:
+            # wq, wk, wv, wo
+            self.weight = self.create_parameter(
+                shape=[4, embed_dim, embed_dim],
+                attr=self._weight_attr,
+                dtype=self._dtype,
+                is_bias=False)
+        else:
+            ## linear parameters.
+            self.qkv_weight = self.create_parameter(
+                shape=[3, num_heads, self.head_dim, embed_dim],
+                attr=self._weight_attr,
+                dtype=self._dtype,
+                is_bias=False)
+            self.qkv_bias = self.create_parameter(
+                shape=[3, num_heads, self.head_dim],
+                attr=self._bias_attr,
+                dtype=self._dtype,
+                is_bias=True)
+            self.out_linear_weight = self.create_parameter(
+                shape=[embed_dim, embed_dim],
+                attr=self._weight_attr,
+                dtype=self._dtype,
+                is_bias=False)
+
         self.out_linear_bias = self.create_parameter(
             shape=[embed_dim],
             attr=self._bias_attr,
             dtype=self._dtype,
             is_bias=True)
-
         ## layer_norm parameters.
         self.ln_scale = self.create_parameter(
-            attr=None,
+            attr=self._weight_attr,
             shape=[embed_dim],
             default_initializer=Constant(value=1.0))
         self.ln_bias = self.create_parameter(
-            attr=None, shape=[embed_dim], is_bias=True)
+            attr=self._bias_attr, shape=[embed_dim], is_bias=True)
         self.ln_2_scale = self.create_parameter(
-            attr=None,
+            attr=self._weight_attr,
             shape=[embed_dim],
             default_initializer=Constant(value=1.0))
         self.ln_2_bias = self.create_parameter(
-            attr=None, shape=[embed_dim], is_bias=True)
+            attr=self._bias_attr, shape=[embed_dim], is_bias=True)
+
         ## dropout parameters
         self.dropout = dropout
         self.attn_dropout = attn_dropout
 
         self.name = name
 
-    def forward(self, query, key=None, value=None, attn_mask=None, cache=None):
+    # user: input_x ,attn_mask or seq_len
+    def forward(self, query, key=None, value=None, attn_mask=None, seq_len=None, attn_low_window=None, attn_high_window=None, seq_len_host=None, cache=None):
         """
         Applies multi-head attention to map queries and a set of key-value pairs
         to outputs.
@@ -267,24 +272,50 @@ class FusedMultiHeadAttention(Layer):
         if attn_mask is not None:
             # Support bool or int mask
             attn_mask = _convert_attention_mask(attn_mask, query.dtype)
-        out = F.fused_multihead_attention(
-            x=query,
-            qkv_weight=self.qkv_weight,
-            out_linear_weight=self.out_linear_weight,
-            pre_layer_norm=self.normalize_before,
-            ln_scale=self.ln_scale,
-            ln_bias=self.ln_bias,
-            ln_2_scale=self.ln_2_scale,
-            ln_2_bias=self.ln_2_bias,
-            epsilon=1e-05,
-            qkv_bias=self.qkv_bias,
-            out_linear_bias=self.out_linear_bias,
-            src_mask=attn_mask,
-            dropout=self.dropout,
-            attn_dropout=self.attn_dropout,
-            ln2_epsilon=1e-05)
+        if self.cudnn_version >= 8000:
+            # if seq_len is None:
+            #     seq_len = 
+            # if attn_low_windows is None:
+            #     attn_low_windows = 
+            # if attn_high_windows is None:
+            #     attn_high_windows = 
+            out = F.fused_multihead_attention_cudnn_impl(
+                x=query,
+                weight=self.weight,
+                seq_len=seq_len,
+                num_heads=self.num_heads,
+                pre_layer_norm=self.normalize_before,
+                ln_scale=self.ln_scale,
+                ln_bias=self.ln_bias,
+                ln_2_scale=self.ln_2_scale,
+                ln_2_bias=self.ln_2_bias,
+                epsilon=1e-05,
+                out_linear_bias=self.out_linear_bias,
+                dropout=self.dropout,
+                attn_dropout=self.attn_dropout,
+                ln2_epsilon=1e-05,
+                attn_low_windows=attn_low_window,
+                attn_high_windows=attn_high_window,
+                attn_qo_seqlen=seq_len_host,
+                attn_kv_seqlen=seq_len_host)
+        else:
+            out = F.fused_multihead_attention(
+                x=query,
+                qkv_weight=self.qkv_weight,
+                out_linear_weight=self.out_linear_weight,
+                pre_layer_norm=self.normalize_before,
+                ln_scale=self.ln_scale,
+                ln_bias=self.ln_bias,
+                ln_2_scale=self.ln_2_scale,
+                ln_2_bias=self.ln_2_bias,
+                epsilon=1e-05,
+                qkv_bias=self.qkv_bias,
+                out_linear_bias=self.out_linear_bias,
+                src_mask=attn_mask,
+                dropout=self.dropout,
+                attn_dropout=self.attn_dropout,
+                ln2_epsilon=1e-05)
         return out
-
 
 class FusedFeedForward(Layer):
     def __init__(self,
@@ -460,6 +491,37 @@ class FusedTransformerEncoderLayer(Layer):
             weight_attr=weight_attrs[1],
             bias_attr=bias_attrs[1])
 
+'''
+        super(FusedTransformerEncoderLayer, self).__init__()
+        assert d_model > 0, ("Expected d_model to be greater than 0, "
+                             "but recieved {}".format(d_model))
+        assert nhead > 0, ("Expected nhead to be greater than 0, "
+                           "but recieved {}".format(nhead))
+        assert dim_feedforward > 0, (
+            "Expected dim_feedforward to be greater than 0, "
+            "but recieved {}".format(dim_feedforward))
+        attn_dropout = dropout if attn_dropout is None else attn_dropout
+        act_dropout = dropout if act_dropout is None else act_dropout
+        self.normalize_before = normalize_before
+
+        weight_attrs = _convert_param_attr_to_list(weight_attr, 2)
+        bias_attrs = _convert_param_attr_to_list(bias_attr, 2)
+
+        self.fused_attn = FusedMultiHeadAttention(
+            d_model,
+            nhead,
+            dropout=attn_dropout,
+            weight_attr=weight_attrs[0],
+            bias_attr=bias_attrs[0])
+
+        self.ffn = FusedFeedForward(
+            d_model,
+            dim_feedforward,
+            dropout=dropout,
+            act_dropout=act_dropout,
+            normalize_before=self.normalize_before,
+            weight_attrs[1],
+            bias_attrs[1])
     def forward(self, src, src_mask=None, cache=None):
         """
         Applies a Transformer encoder layer on the input.
@@ -490,7 +552,6 @@ class FusedTransformerEncoderLayer(Layer):
                 incremental length. See `MultiHeadAttention.gen_cache` and \
                 `MultiHeadAttention.forward` for more details.
         """
-
         src_mask = _convert_attention_mask(src_mask, src.dtype)
         if cache is None:
             attn_out = self.fused_attn(src, attn_mask=src_mask)
@@ -501,6 +562,7 @@ class FusedTransformerEncoderLayer(Layer):
         ffn_out = self.ffn(attn_out)
 
         return ffn_out if cache is None else (ffn_out, incremental_cache)
+'''
 
 
 class FusedTransformer(Layer):

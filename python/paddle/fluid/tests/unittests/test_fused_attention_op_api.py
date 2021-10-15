@@ -24,9 +24,6 @@ from paddle.fluid import layers
 from paddle.static import Program, program_guard
 import unittest
 
-place = paddle.CUDAPlace(0)
-
-
 def fc(x, weight):
     return np.matmul(x, weight)
 
@@ -86,9 +83,8 @@ def compute_reference(pre_layer_norm, query, attn_mask, ln_scale, ln_bias,
 
     num_head = qkv_weight.shape[1]
     head_dim = qkv_weight.shape[2]
-    #
-    qkv_weight = qkv_weight.transpose(
-        (3, 0, 1, 2))  # embed_dim, 3, num_heads, self.head_dim
+    # embed_dim, 3, num_heads, self.head_dim
+    qkv_weight = qkv_weight.transpose((3, 0, 1, 2))
     qkv_weight = qkv_weight.reshape(qkv_weight.shape[0], qkv_weight.shape[1] *
                                     qkv_weight.shape[2] * qkv_weight.shape[3])
 
@@ -110,7 +106,7 @@ def compute_reference(pre_layer_norm, query, attn_mask, ln_scale, ln_bias,
 
     q = qkv[0:1, ::]
     q = q.reshape(batch_size, num_head, seq_len, head_dim)
-    k = qkv[1:2, ::]  #[1, batch_size, num_head, seq_len, head_dim]
+    k = qkv[1:2, ::]  #[1, batch_size, num_head, seq_len, head_dim] 
     k = k.reshape(batch_size, num_head, seq_len, head_dim)
     v = qkv[2::]
     v = v.reshape(batch_size, num_head, seq_len, head_dim)
@@ -208,7 +204,7 @@ class TestFusedAttentionAPI(unittest.TestCase):
                                     fused_attn.qkv_bias.numpy(),
                                     fused_attn.out_linear_weight.numpy(),
                                     fused_attn.out_linear_bias.numpy())
-        self.assertTrue(np.allclose(ref_out, out, rtol=1e-5, atol=1e-5))
+        self.assertTrue(np.allclose(ref_out, out, rtol=1e-5, atol=1e-3))
 
     def run_static(self):
         fused_attn = FusedMultiHeadAttention(
@@ -256,7 +252,7 @@ class TestFusedAttentionAPI(unittest.TestCase):
                                     out_linear_weight, out_linear_bias)
         self.assertTrue(
             np.allclose(
-                np.array(ref_out), np.array(out), rtol=1e-5, atol=1e-5))
+                np.array(ref_out), np.array(out), rtol=1e-5, atol=1e-3))
 
     def test_dynamic_api(self):
         paddle.disable_static(place=paddle.CUDAPlace(0))

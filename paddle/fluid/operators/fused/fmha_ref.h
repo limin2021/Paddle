@@ -1,11 +1,8 @@
 /* Copyright (c) 2021 PaddlePaddle Authors. All Rights Reserved.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
     http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -85,25 +82,20 @@ class FMHARef {
     std::vector<int> perm_1 = {2, 0, 3, 1, 4};
     TransposeGPUKernelDriver<T>(dev_ctx_, ndims, qkv_input_tensor, perm_1,
                                 transpose_2_out_tensor);
-#if 1
     T* qkv_data = transpose_2_out_tensor->data<T>();
     T* qk_out_data = qk_out_tensor->data<T>();
     T* qktv_out_data = qktv_out_tensor->data<T>();
     T* softmax_out_data = softmax_out_tensor->data<T>();
     T* dropout_out_data = dropout_out_tensor->data<T>();
     T* fmha_out_data = fmha_out_tensor->data<T>();
-#endif
 
     int q_size = batch_size_ * seq_len_ * num_head_ * head_dim_;
     int k_size = q_size;
-#if 1
     T* q_ptr = qkv_data;
     T* k_ptr = q_ptr + q_size;
     T* v_ptr = k_ptr + k_size;
-#endif
 
-// q*k^t, batched_gemm
-#if 1
+    // q*k^t, batched_gemm
     CBLAS_TRANSPOSE transA = CblasNoTrans;
     CBLAS_TRANSPOSE transB = CblasTrans;
     auto blas = math::GetBlas<platform::CUDADeviceContext, T>(dev_ctx_);
@@ -115,12 +107,9 @@ class FMHARef {
     T beta = static_cast<T>(0.0);
     int64_t stride_a = gemm_m * gemm_k;
     int64_t stride_b = gemm_k * gemm_n;
-#endif
-#if 1
     blas.BatchedGEMM(transA, transB, gemm_m, gemm_n, gemm_k, alpha, q_ptr,
                      k_ptr, beta, qk_out_data, gemm_batch_size, stride_a,
                      stride_b);
-#endif
 
     std::vector<const Tensor*> ins;
     std::vector<Tensor*> outs;
@@ -130,21 +119,15 @@ class FMHARef {
     int elewise_add_axis = -1;
     int softmax_axis = -1;
     if (&src_mask_tensor != nullptr) {
-      // mask_out = qk_out + src_mask
       LaunchElementwiseCudaKernel<ElementwiseType::kBinary, T, T>(
           dev_ctx_, ins, &outs, elewise_add_axis, AddFunctor<T>());
-      // softmax(mask_out)
       SoftmaxForwardCUDAKernelDriver<T>(dev_ctx_, *src_mask_out_tensor,
                                         softmax_axis, softmax_out_tensor);
     } else {
-// softmax_out = softmax(qk_out)
-#if 1
       SoftmaxForwardCUDAKernelDriver<T>(dev_ctx_, *qk_out_tensor, softmax_axis,
                                         softmax_out_tensor);
-#endif
     }
 
-#if 1
     transB = CblasNoTrans;
     gemm_m = seq_len_;
     gemm_n = head_dim_;
@@ -171,7 +154,6 @@ class FMHARef {
       blas.BatchedGEMM(transA, transB, gemm_m, gemm_n, gemm_k, alpha,
                        softmax_out_data, v_ptr, beta, qktv_out_data,
                        gemm_batch_size, stride_a, stride_b);
-#endif
     }
     // transpose: [0, 2, 1, 3]
     // output shape: [batch_size, seq_len, num_heads, head_dim]
@@ -195,18 +177,14 @@ class FMHARef {
     int k_size = q_size;
     int softmax_axis = -1;
 
-#if 1
     T* qkv_grad_data = transpose_2_out_grad_tensor->data<T>();
     T* q_grad_ptr = qkv_grad_data;
     T* k_grad_ptr = q_grad_ptr + q_size;
     T* v_grad_ptr = k_grad_ptr + k_size;
-#endif
-#if 1
     const T* qkv_data = transpose_2_out_tensor.data<T>();
     const T* q_ptr = qkv_data;
     const T* k_ptr = q_ptr + q_size;
     const T* v_ptr = k_ptr + k_size;
-#endif
     const T* softmax_out_data = softmax_out_tensor.data<T>();
     T* softmax_out_grad_data = softmax_out_grad_tensor->data<T>();
     const T* dropout_out_data = dropout_out_tensor.data<T>();
@@ -284,8 +262,9 @@ class FMHARef {
         framework::TensorCopy(*src_mask_out_grad_tensor, dev_ctx_.GetPlace(),
                               dev_ctx_, qk_out_grad_tensor);
       } else {
-        // todo:
-        std::cout << "NotImplemented\n";
+        PADDLE_THROW(platform::errors::InvalidArgument(
+            "Only used for the backward elementwise_add op when"
+            "dy is not needed and dx is not reduce"));
         return;
       }
 
