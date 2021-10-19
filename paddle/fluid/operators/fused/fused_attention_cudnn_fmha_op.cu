@@ -59,6 +59,7 @@ static int get_size(const framework::Tensor* tensor){
 
 template<typename T>
 static void set_zero(framework::Tensor* data){
+	return;
 	if(data == nullptr) return;
 	int n = get_size(data);
 	cudaMemset(data->data<T>(), 0, n * sizeof(T));
@@ -92,15 +93,15 @@ class FusedAttentionCuDNNFMHAOpKernel : public framework::OpKernel<T> {
     check_nan<U>("forward ln_scale", ln_scale->data<U>(), get_size(ln_scale));
     auto *ln_bias = ctx.Input<Tensor>("LnBias");
     check_nan<U>("forward ln_bias", ln_bias->data<U>(), get_size(ln_bias));
-    auto *ln_mean = ctx.Output<Tensor>("LnMean");
+    //auto *ln_mean = ctx.Output<Tensor>("LnMean");
     auto *ln_var = ctx.Output<Tensor>("LnVariance");
     auto *ln_out = ctx.Output<Tensor>("LnOut");
     auto *ln_scale_data = (ln_scale == nullptr ? nullptr : ln_scale->data<U>());
     auto *ln_bias_data = (ln_bias == nullptr ? nullptr : ln_bias->data<U>());
-    auto *ln_mean_data = ln_mean->mutable_data<U>(ctx.GetPlace());
-    auto *ln_var_data = ln_var->mutable_data<U>(ctx.GetPlace());
-    auto *ln_out_data = ln_out->mutable_data<T>(ctx.GetPlace());
-    set_zero<U>(ln_mean);
+    //auto *ln_mean_data = ln_mean->mutable_data<U>(ctx.GetPlace());
+    //auto *ln_var_data = ln_var->mutable_data<U>(ctx.GetPlace());
+    //auto *ln_out_data = ln_out->mutable_data<T>(ctx.GetPlace());
+    //set_zero<U>(ln_mean);
     set_zero<U>(ln_var);
     set_zero<T>(ln_out);
 
@@ -223,23 +224,20 @@ class FusedAttentionCuDNNFMHAOpKernel : public framework::OpKernel<T> {
     // compute
     if (pre_layer_norm) {
 	    printf("fasle\n");
-        layer_norm_compute.ComputeForward(x_data, ln_scale_data, ln_bias_data,
-                                      ln_out_data, ln_mean_data, ln_var_data);
-	check_nan("forward ln_out_data", ln_out_data, get_size(ln_out));
-	check_nan<U>("forward ln_mean_data", ln_mean_data, get_size(ln_mean));
-	check_nan<U>("forward ln_var_data", ln_var_data, get_size(ln_var));
-        // the input of cudnn fmha is ln_out.
-        MHAFwKernel<T>(ctx.cuda_device_context(), 
-                    ln_out, ln_out, ln_out, 
-                    mha_w, mha_qo_slen, mha_kv_slen,
-                    attn_dropout_rate, attn_heads, attn_sm_scaler,
-                    attn_vec_size, attn_q_proj_size, attn_k_proj_size,
-                    attn_v_proj_size, attn_o_proj_size,
-                    attn_max_qo_seq_len, attn_max_kv_seq_len,
-                    attn_beam_size, attn_low_windows,
-                    attn_high_windows, out_linear_out,
-                    attn_qo_seqlen, attn_kv_seqlen, reserve_space);
-	check_nan("forward out_linear_out", out_linear_out->data<T>(), get_size(out_linear_out));
+        //layer_norm_compute.ComputeForward(x_data, ln_scale_data, ln_bias_data,
+        //                              ln_out_data, ln_mean_data, ln_var_data);
+        //// the input of cudnn fmha is ln_out.
+        //MHAFwKernel<T>(ctx.cuda_device_context(), 
+        //            ln_out, ln_out, ln_out, 
+        //            mha_w, mha_qo_slen, mha_kv_slen,
+        //            attn_dropout_rate, attn_heads, attn_sm_scaler,
+        //            attn_vec_size, attn_q_proj_size, attn_k_proj_size,
+        //            attn_v_proj_size, attn_o_proj_size,
+        //            attn_max_qo_seq_len, attn_max_kv_seq_len,
+        //            attn_beam_size, attn_low_windows,
+        //            attn_high_windows, out_linear_out,
+        //            attn_qo_seqlen, attn_kv_seqlen, reserve_space);
+	//check_nan("forward out_linear_out", out_linear_out->data<T>(), get_size(out_linear_out));
     } else {
         // the input of cudnn fmha is x
         MHAFwKernel<T>(ctx.cuda_device_context(), 
@@ -300,11 +298,11 @@ class FusedAttentionCuDNNFMHAGradKernel : public framework::OpKernel<T> {
         (ln_2_scale == nullptr ? nullptr : ln_2_scale->data<U>());
 
     // fw output
-    auto *ln_mean = ctx.Input<Tensor>("LnMean");
+    //auto *ln_mean = ctx.Input<Tensor>("LnMean");
     //check_nan<U>("backward ln_scale", ln_mean->data<U>(), get_size(ln_mean));
-    auto *ln_var = ctx.Input<Tensor>("LnVariance");
+    //auto *ln_var = ctx.Input<Tensor>("LnVariance");
     //check_nan<U>("backward ln_var", ln_var->data<U>(), get_size(ln_var));
-    auto *ln_out = ctx.Input<Tensor>("LnOut");
+    //auto *ln_out = ctx.Input<Tensor>("LnOut");
     //check_nan<T>("backward ln_out", ln_out->data<T>(), get_size(ln_out));
     auto *out_linear_out = ctx.Input<Tensor>("OutLinearOut");
     check_nan<T>("backward out_linear_out", out_linear_out->data<T>(), get_size(out_linear_out));
@@ -316,9 +314,9 @@ class FusedAttentionCuDNNFMHAGradKernel : public framework::OpKernel<T> {
     auto *bias_dropout_residual_out =
         ctx.Input<Tensor>("BiasDropoutResidualOut");
 
-    auto *ln_mean_data = ln_mean->data<U>();
-    auto *ln_var_data = ln_var->data<U>();
-    auto *ln_out_data = ln_out->data<T>();
+    //auto *ln_mean_data = ln_mean->data<U>();
+    //auto *ln_var_data = ln_var->data<U>();
+    //auto *ln_out_data = ln_out->data<T>();
     auto *out_linear_out_data = out_linear_out->data<T>();
     auto *ln_2_mean_data = ln_2_mean->data<U>();
     auto *ln_2_var_data = ln_2_var->data<U>();
@@ -448,9 +446,9 @@ class FusedAttentionCuDNNFMHAGradKernel : public framework::OpKernel<T> {
         // LaunchSameDimsElementwiseCudaKernel<ET, InT, OutT>(cuda_ctx, ins, outs,
         //         func);
 
-        layer_norm_compute.ComputeBackward(x_data, d_ln_out_data, ln_scale_data,
-                                            ln_mean_data, ln_var_data, d_x_data,
-                                            d_ln_scale_data, d_ln_bias_data);
+        //layer_norm_compute.ComputeBackward(x_data, d_ln_out_data, ln_scale_data,
+        //                                    ln_mean_data, ln_var_data, d_x_data,
+        //                                    d_ln_scale_data, d_ln_bias_data);
         
     } else {
         MHAGradKernel<T>(ctx.cuda_device_context(),
