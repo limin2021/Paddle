@@ -104,7 +104,7 @@ def _insert_cast_op(block, op, idx, src_dtype, dest_dtype):
                 continue
 
         if src_dtype == core.VarDesc.VarType.FP32 and op.type in [
-                'fused_attention', 'fused_ffn'
+                'fused_attention', 'fused_attention_cudnn_fmha', 'fused_ffn'
         ]:
             if in_name in {
                     'LnScale', 'LnBias', 'Ln2Scale', 'Ln2Bias', "Ln1Scale",

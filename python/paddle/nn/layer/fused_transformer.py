@@ -21,6 +21,7 @@ from ...fluid.data_feeder import convert_dtype
 from ..initializer import Constant
 
 import collections
+import numpy
 
 
 def _convert_param_attr_to_list(param_attr, n):
@@ -229,45 +230,6 @@ class FusedMultiHeadAttention(Layer):
     # user: input_x ,attn_mask or seq_len
     def forward(self, query, key=None, value=None, attn_mask=None, seq_len=None, attn_low_window=None, attn_high_window=None, seq_len_host=None, cache=None):
         """
-        Applies multi-head attention to map queries and a set of key-value pairs
-        to outputs.
-        Parameters:
-            query (Tensor): The queries for multi-head attention. It is a
-                tensor with shape `[batch_size, query_length, embed_dim]`. The
-                data type should be float32 or float64.
-            attn_mask (Tensor, optional): A tensor used in multi-head attention
-                to prevents attention to some unwanted positions, usually the
-                paddings or the subsequent positions. It is a tensor with shape
-                broadcasted to `[batch_size, n_head, sequence_length, sequence_length]`.
-                When the data type is bool, the unwanted positions have `False`
-                values and the others have `True` values. When the data type is
-                int, the unwanted positions have 0 values and the others have 1
-                values. When the data type is float, the unwanted positions have
-                `-INF` values and the others have 0 values. It can be None when
-                nothing wanted or needed to be prevented attention to. Default None.
-            cache (MultiHeadAttention.Cache|MultiHeadAttention.StaticCache, optional):
-                It is a namedtuple with `k` and `v` as fields, and stores tensors
-                shaped `[batch_size, num_heads, length, embed_dim]` which are results
-                of linear projection, reshape and transpose calculations in
-                MultiHeadAttention. If it is an instance of `Cache`, `k` and `v`
-                fields reserve intermediate results of previous positions, which
-                mostly used for decoder self attention. If it is an instance of
-                `StaticCache`, `key` and `value` args would be ignored, `k` and
-                `v` fields would be used as calculated results on `key` and
-                `value`, which mostly used for decoder-encoder cross attention.
-                It is only used for inference and should be None for training.
-                Default None.
-        Returns:
-            Tensor|tuple: It is a tensor that has the same shape and data type \
-                as `query`, representing attention output. Or a tuple if \
-                `need_weights` is True or `cache` is not None. If `need_weights` \
-                is True, except for attention output, the tuple also includes \
-                the attention weights tensor shaped `[batch_size, num_heads, query_length, key_length]`. \
-                If `cache` is not None, the tuple then includes the new cache \
-                having the same type as `cache`, and if it is `StaticCache`, it \
-                is same as the input `cache`, if it is `Cache`, the new cache \
-                reserves tensors concatanating raw tensors with intermediate \
-                results of current query.
         """
         if attn_mask is not None:
             # Support bool or int mask
@@ -380,7 +342,7 @@ class FusedFeedForward(Layer):
             shape=[d_model], attr=None, is_bias=True)
 
     def forward(self, src, cache=None):
-        out = F.fused_ffn(src, self._linear1_weight, self._linear2_weight,
+        out = F.fused_feedforward(src, self._linear1_weight, self._linear2_weight,
                           self._linear1_bias, self._linear2_bias,
                           self._ln1_scale, self._ln1_bias, self._ln2_scale,
                           self._ln2_bias, self._dropout, self._act_dropout,
@@ -491,37 +453,6 @@ class FusedTransformerEncoderLayer(Layer):
             weight_attr=weight_attrs[1],
             bias_attr=bias_attrs[1])
 
-'''
-        super(FusedTransformerEncoderLayer, self).__init__()
-        assert d_model > 0, ("Expected d_model to be greater than 0, "
-                             "but recieved {}".format(d_model))
-        assert nhead > 0, ("Expected nhead to be greater than 0, "
-                           "but recieved {}".format(nhead))
-        assert dim_feedforward > 0, (
-            "Expected dim_feedforward to be greater than 0, "
-            "but recieved {}".format(dim_feedforward))
-        attn_dropout = dropout if attn_dropout is None else attn_dropout
-        act_dropout = dropout if act_dropout is None else act_dropout
-        self.normalize_before = normalize_before
-
-        weight_attrs = _convert_param_attr_to_list(weight_attr, 2)
-        bias_attrs = _convert_param_attr_to_list(bias_attr, 2)
-
-        self.fused_attn = FusedMultiHeadAttention(
-            d_model,
-            nhead,
-            dropout=attn_dropout,
-            weight_attr=weight_attrs[0],
-            bias_attr=bias_attrs[0])
-
-        self.ffn = FusedFeedForward(
-            d_model,
-            dim_feedforward,
-            dropout=dropout,
-            act_dropout=act_dropout,
-            normalize_before=self.normalize_before,
-            weight_attrs[1],
-            bias_attrs[1])
     def forward(self, src, src_mask=None, cache=None):
         """
         Applies a Transformer encoder layer on the input.
@@ -554,7 +485,10 @@ class FusedTransformerEncoderLayer(Layer):
         """
         src_mask = _convert_attention_mask(src_mask, src.dtype)
         if cache is None:
-            attn_out = self.fused_attn(src, attn_mask=src_mask)
+            seq_len_vec = numpy.full((src.shape[0], ), src.shape[1], dtype=numpy.int32)
+            attn_low_windows = numpy.zeros((src.shape[1], ), dtype=numpy.int32)
+            attn_high_windows = numpy.full((src.shape[1], ), src.shape[1], dtype=numpy.int32)
+            attn_out = self.fused_attn(src, attn_mask=src_mask, seq_len = paddle.to_tensor(seq_len_vec, stop_gradient=False), seq_len_host=seq_len_vec, attn_low_window=attn_low_windows, attn_high_window=attn_high_windows)
         else:
             attn_out, incremental_cache = self.fused_attn(
                 src, attn_mask=src_mask, cache=cache)
@@ -562,7 +496,6 @@ class FusedTransformerEncoderLayer(Layer):
         ffn_out = self.ffn(attn_out)
 
         return ffn_out if cache is None else (ffn_out, incremental_cache)
-'''
 
 
 class FusedTransformer(Layer):
