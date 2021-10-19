@@ -57,6 +57,14 @@ static int get_size(const framework::Tensor* tensor){
 	return size;
 }
 
+template<typename T>
+static void set_zero(framework::Tensor* data){
+	if(data == nullptr) return;
+	int n = get_size(data);
+	cudaMemset(data->data<T>(), 0, n * sizeof(T));
+}
+
+
 // Add
 template <typename T>
 struct TernaryAddFunctor {
@@ -92,6 +100,9 @@ class FusedAttentionCuDNNFMHAOpKernel : public framework::OpKernel<T> {
     auto *ln_mean_data = ln_mean->mutable_data<U>(ctx.GetPlace());
     auto *ln_var_data = ln_var->mutable_data<U>(ctx.GetPlace());
     auto *ln_out_data = ln_out->mutable_data<T>(ctx.GetPlace());
+    set_zero<U>(ln_mean);
+    set_zero<U>(ln_var);
+    set_zero<T>(ln_out);
 
     auto *ln_scale_2 = ctx.Input<Tensor>("Ln2Scale");
     check_nan<U>("forward ln_scale_2", ln_scale_2->data<U>(), get_size(ln_scale_2));
@@ -112,6 +123,9 @@ class FusedAttentionCuDNNFMHAOpKernel : public framework::OpKernel<T> {
         bias_dropout_residual_out->mutable_data<T>(ctx.GetPlace());
     auto *ln_mean_2_data = ln_mean_2->mutable_data<U>(ctx.GetPlace());
     auto *ln_var_2_data = ln_var_2->mutable_data<U>(ctx.GetPlace());
+    set_zero<T>(bias_dropout_residual_out);
+    set_zero<U>(ln_mean_2);
+    set_zero<U>(ln_var_2);
     
     auto *out_linear_bias = ctx.Input<Tensor>("OutLinearBias");
     check_nan("forward out_linear_bias", out_linear_bias->data<T>(), get_size(out_linear_bias));
@@ -120,6 +134,8 @@ class FusedAttentionCuDNNFMHAOpKernel : public framework::OpKernel<T> {
     auto *out_linear_out_data = out_linear_out->mutable_data<T>(ctx.GetPlace());
     auto *final_out = ctx.Output<Tensor>("Y");
     auto *final_out_data = final_out->mutable_data<T>(ctx.GetPlace());
+    set_zero<T>(final_out);
+    set_zero<T>(out_linear_out);
 
     int batch_size = input_x_dims[0];
     int max_seq_len = input_x_dims[1];
@@ -206,6 +222,7 @@ class FusedAttentionCuDNNFMHAOpKernel : public framework::OpKernel<T> {
     ctx.cuda_device_context().Wait();
     // compute
     if (pre_layer_norm) {
+	    printf("fasle\n");
         layer_norm_compute.ComputeForward(x_data, ln_scale_data, ln_bias_data,
                                       ln_out_data, ln_mean_data, ln_var_data);
 	check_nan("forward ln_out_data", ln_out_data, get_size(ln_out));
@@ -322,6 +339,10 @@ class FusedAttentionCuDNNFMHAGradKernel : public framework::OpKernel<T> {
         d_out_linear_out->mutable_data<T>(ctx.GetPlace());
     auto *d_bias_dropout_residual_out_data =
         d_bias_dropout_residual_out->mutable_data<T>(ctx.GetPlace());
+    //set_zero<T>(d_x);
+    //set_zero<T>(d_ln_out);
+    //set_zero<T>(d_out_linear_out);
+    //set_zero<T>(d_bias_dropout_residual_out);
 
     // bw parameter's grad
     auto *d_ln_scale = ctx.Output<Tensor>(framework::GradVarName("LnScale"));
@@ -358,6 +379,7 @@ class FusedAttentionCuDNNFMHAGradKernel : public framework::OpKernel<T> {
 
     Tensor* d_mha_w = ctx.Output<Tensor>(framework::GradVarName("W"));
     d_mha_w->mutable_data<T>(ctx.GetPlace());
+    //set_zero<T>(d_mha_w);
 
     const auto input_x_dims = input_x->dims();
 
@@ -403,44 +425,51 @@ class FusedAttentionCuDNNFMHAGradKernel : public framework::OpKernel<T> {
     check_nan<T>("backward d_out_linear_out_data1", d_out_linear_out_data, get_size(d_out_linear_out));
     check_nan<T>("backward d_out_linear_out_bias_data", d_out_linear_bias_data, get_size(d_out_linear_bias));
     if (pre_layer_norm) {
+        MHAGradKernel<T>(ctx.cuda_device_context(),
+            d_out_linear_out, input_x, input_x, input_x, 
+            mha_w, mha_qo_slen, mha_kv_slen, 
+            attn_low_windows, attn_high_windows, 
+            d_ln_out, &d_k, &d_v, d_mha_w, reserve_space);
+        
+        std::vector<const Tensor *> ins;
+        std::vector<Tensor *> outs;
+        ins.emplace_back(d_ln_out);
+        ins.emplace_back(&d_k);
+        ins.emplace_back(&d_v);
+        outs.emplace_back(d_ln_out);
+        int elewise_add_axis = -1;
 
+        // LaunchElementwiseCudaKernel<ElementwiseType::kTernary, T, T>(
+        //     ctx.cuda_device_context(), ins, &outs, 
+        //     elewise_add_axis, TernaryAddFunctor<T>());
+        LaunchSameDimsElementwiseCudaKernel<ElementwiseType::kTernary, T, T>(
+            ctx.cuda_device_context(), ins, &outs, TernaryAddFunctor<T>());
 
-	    MHAGradKernel<T>(ctx.cuda_device_context(),
-			    d_out_linear_out, input_x, input_x, input_x, 
-			    mha_w, mha_qo_slen, mha_kv_slen, 
-			    attn_low_windows, attn_high_windows, 
-			    d_ln_out, &d_k, &d_v, d_mha_w, reserve_space);
+        // LaunchSameDimsElementwiseCudaKernel<ET, InT, OutT>(cuda_ctx, ins, outs,
+        //         func);
 
-	    std::vector<const Tensor *> ins;
-	    std::vector<Tensor *> outs;
-	    ins.emplace_back(d_ln_out);
-	    ins.emplace_back(&d_k);
-	    ins.emplace_back(&d_v);
-	    outs.emplace_back(d_ln_out);
-	    int elewise_add_axis = -1;
-
-	    // LaunchElementwiseCudaKernel<ElementwiseType::kTernary, T, T>(
-	    //     ctx.cuda_device_context(), ins, &outs, 
-	    //     elewise_add_axis, TernaryAddFunctor<T>());
-	    LaunchSameDimsElementwiseCudaKernel<ElementwiseType::kTernary, T, T>(
-			    ctx.cuda_device_context(), ins, &outs, TernaryAddFunctor<T>());
-
-	    // LaunchSameDimsElementwiseCudaKernel<ET, InT, OutT>(cuda_ctx, ins, outs,
-	    //         func);
-
-	    layer_norm_compute.ComputeBackward(x_data, d_ln_out_data, ln_scale_data,
-			    ln_mean_data, ln_var_data, d_x_data,
-			    d_ln_scale_data, d_ln_bias_data);
+        layer_norm_compute.ComputeBackward(x_data, d_ln_out_data, ln_scale_data,
+                                            ln_mean_data, ln_var_data, d_x_data,
+                                            d_ln_scale_data, d_ln_bias_data);
+        
     } else {
-	    MHAGradKernel<T>(ctx.cuda_device_context(),
-			    d_out_linear_out, input_x, input_x, input_x, 
-			    mha_w, mha_qo_slen, mha_kv_slen, 
-			    attn_low_windows, attn_high_windows, 
-			    d_x, d_x, d_x, d_mha_w, reserve_space);
-	    check_nan<T>("backward d_out_linear_out", d_out_linear_out->data<T>(), get_size(d_out_linear_out));
-	    check_nan<T>("backward d_x", d_x->data<T>(), get_size(d_x));
-	    check_nan<T>("backward d_mha_w", d_mha_w->data<T>(), get_size(d_mha_w));
-	    check_nan<T>("backward reserve_space", reserve_space->data<T>(), get_size(reserve_space));
+        MHAGradKernel<T>(ctx.cuda_device_context(),
+            d_out_linear_out, input_x, input_x, input_x, 
+            mha_w, mha_qo_slen, mha_kv_slen, 
+            attn_low_windows, attn_high_windows, 
+            d_x, &d_k, &d_v, d_mha_w, reserve_space);
+        
+        std::vector<const Tensor *> ins;
+        std::vector<Tensor *> outs;
+        ins.emplace_back(d_x);
+        ins.emplace_back(&d_k);
+        ins.emplace_back(&d_v);
+        outs.emplace_back(d_x);
+        int elewise_add_axis = -1;
+
+        LaunchSameDimsElementwiseCudaKernel<ElementwiseType::kTernary, T, T>(
+            ctx.cuda_device_context(), ins, &outs, TernaryAddFunctor<T>());
+
     }
     // gradient accumulation: d_x[] + d_residual[] = d_x[]
     std::vector<const Tensor *> ins;
@@ -450,10 +479,10 @@ class FusedAttentionCuDNNFMHAGradKernel : public framework::OpKernel<T> {
     outs.emplace_back(d_x);
     int elewise_add_axis = -1;
     LaunchElementwiseCudaKernel<ElementwiseType::kBinary, T, T>(
-		    ctx.cuda_device_context(), ins, &outs, 
-		    elewise_add_axis, AddFunctor<T>());
-    check_nan<T>("backward d_x2", d_x->data<T>(), get_size(d_x));
-  }
+                            ctx.cuda_device_context(), ins, &outs, 
+                            elewise_add_axis, AddFunctor<T>());
+    
+    }
 #endif
 };
 

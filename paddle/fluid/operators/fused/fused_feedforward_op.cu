@@ -28,6 +28,16 @@ namespace operators {
 
 using Tensor = framework::Tensor;
 
+static int get_size(const framework::Tensor* tensor){
+	if(tensor == nullptr) return 0;
+	auto dim = tensor->dims();
+	int size = 1;
+	for(int i = 0; i < dim.size(); i++){
+		size *= dim[i];
+	}
+	return size;
+}
+
 template <typename DeviceContext, typename T>
 class FusedFeedForwardKernel : public framework::OpKernel<T> {
  public:
@@ -111,6 +121,7 @@ class FusedFeedForwardKernel : public framework::OpKernel<T> {
   }
 
   void Compute(const framework::ExecutionContext& context) const override {
+    using U = LayerNormParamType<T>;
     auto* x = context.Input<framework::Tensor>("X");
     auto* linear1_weight = context.Input<framework::Tensor>("Linear1Weight");
     auto* linear1_bias = context.Input<framework::Tensor>("Linear1Bias");
@@ -143,7 +154,6 @@ class FusedFeedForwardKernel : public framework::OpKernel<T> {
     DropoutParam dropout_param1(context, 1);
     DropoutParam dropout_param2(context, 2);
 
-    using U = LayerNormParamType<T>;
     auto place = context.GetPlace();
     out->mutable_data<T>(place);
     dropout1_mask->mutable_data<uint8_t>(place);
