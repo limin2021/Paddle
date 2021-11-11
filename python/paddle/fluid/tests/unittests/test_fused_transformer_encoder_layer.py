@@ -16,6 +16,7 @@ import numpy as np
 import paddle
 from paddle.incubate.nn import FusedTransformerEncoderLayer
 from paddle.nn import TransformerEncoderLayer
+from paddle.fluid.framework import default_main_program
 import unittest
 
 
@@ -30,14 +31,14 @@ class TestFusedTransformerEncoderLayer(unittest.TestCase):
         self.has_attn_mask = True
 
     def setUp(self):
-        self.batch_size = np.random.randint(1, 16)
-        self.query_length = np.random.randint(1, 512)
+        self.batch_size = np.random.randint(1, 8)
+        self.query_length = np.random.randint(1, 128)
         self.nhead = 16
         self.head_dim = 4
         self.num_heads = self.nhead
         self.d_model = self.head_dim * self.num_heads
         self.embed_dim = self.d_model
-        self.dim_feedforward = np.random.randint(1, 64)
+        self.dim_feedforward = np.random.randint(1, 32)
         self.dropout_rate = 0
         self.attn_dropout_rate = None
         self.act_dropout_rate = None
@@ -60,7 +61,7 @@ class TestFusedTransformerEncoderLayer(unittest.TestCase):
         return paddle.concat(x=[fq, fk, fv], axis=0)
 
     def test_out(self):
-        paddle.seed(0)
+        default_main_program().random_seed = 42
         base_encoder = TransformerEncoderLayer(
             self.d_model, self.nhead, self.dim_feedforward, self.dropout_rate,
             self.activation, self.attn_dropout_rate, self.act_dropout_rate,
