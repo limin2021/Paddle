@@ -27,10 +27,17 @@ limitations under the License. */
 #include "paddle/fluid/operators/fused/fmha_ref.h"
 #include "paddle/fluid/operators/fused/fused_dropout_helper.h"
 
+#include "paddle/fluid/operators/elementwise/elementwise_op_broadcast.cu.h"
+#include "paddle/fluid/operators/kernel_primitives/kernel_primitives.h"
+#include "paddle/fluid/operators/reduce_ops/reduce_functor_op.h"
+
 namespace paddle {
 namespace operators {
 
 using Tensor = framework::Tensor;
+
+template <typename T>
+using ReduceParamType = typename CudnnDataType<T>::BatchNormParamType;
 
 template <typename T>
 class FusedAttentionOpKernel : public framework::OpKernel<T> {
@@ -139,6 +146,10 @@ class FusedAttentionOpKernel : public framework::OpKernel<T> {
 
     auto layer_norm_compute = AttnLayerNorm<T>(ctx.cuda_device_context(),
                                                epsilon, bsz_seq, dim_embed);
+
+    auto layer_norm_compute_2 = AttnLayerNorm<T>(ctx.cuda_device_context(),
+                                                 epsilon, bsz_seq, dim_embed);
+
     // (transA, transB, compute_bias) = (false, true, true)
     auto qkv_compute = AttnMatMul<T>(ctx.cuda_device_context(), false, true,
                                      bsz_seq, output_size, input_size, true);
@@ -201,11 +212,46 @@ class FusedAttentionOpKernel : public framework::OpKernel<T> {
       auto *ln_mean_2_data = ln_mean_2->mutable_data<U>(ctx.GetPlace());
       auto *ln_var_2_data = ln_var_2->mutable_data<U>(ctx.GetPlace());
       // output = layernorm(residual + dropout(input + bias))
-      fused_dropout_layernorm_helper.LayernormResidualDropoutBias(
-          ctx.cuda_device_context(), out_linear_out_data, x_data,
-          out_linear_bias_data, ln_scale_2_data, ln_bias_2_data,
-          bias_dropout_residual_out_data, dropout_mask_out_data, final_out_data,
-          ln_mean_2_data, ln_var_2_data);
+      //   fused_dropout_layernorm_helper.LayernormResidualDropoutBias(
+      //       ctx.cuda_device_context(), out_linear_out_data, x_data,
+      //       out_linear_bias_data, ln_scale_2_data, ln_bias_2_data,
+      //       bias_dropout_residual_out_data, dropout_mask_out_data,
+      //       final_out_data,
+      //       ln_mean_2_data, ln_var_2_data);
+
+      // bias add
+      framework::Tensor bias_add_out_tmp;
+      bias_add_out_tmp.Resize({batch_size, max_seq_len, dim_embed});
+      bias_add_out_tmp.mutable_data<ReduceParamType<T>>(ctx.GetPlace());
+
+      std::vector<const Tensor *> ins;
+      std::vector<Tensor *> outs;
+      ins.emplace_back(out_linear_out);
+      ins.emplace_back(out_linear_bias);
+      outs.emplace_back(&bias_add_out_tmp);
+      int elewise_add_axis = -1;
+      LaunchElementwiseCudaKernel<ElementwiseType::kBinary, T, T>(
+          ctx.cuda_device_context(), ins, &outs, elewise_add_axis,
+          AddFunctor<T>());
+
+      // residual add
+      std::vector<const Tensor *> ins_1;
+      std::vector<Tensor *> outs_1;
+      ins_1.emplace_back(&bias_add_out_tmp);
+      ins_1.emplace_back(input_x);
+      outs_1.emplace_back(bias_dropout_residual_out);
+      // int elewise_add_axis = -1;
+      LaunchElementwiseCudaKernel<ElementwiseType::kBinary, T, T>(
+          ctx.cuda_device_context(), ins_1, &outs_1, elewise_add_axis,
+          AddFunctor<T>());
+
+      // fused_dropout_layernorm_helper.ResidualDropoutBias(
+      //     ctx.cuda_device_context(), out_linear_out_data, x_data,
+      //     out_linear_bias_data, bias_dropout_residual_out_data,
+      //     dropout_mask_out_data);
+      layer_norm_compute_2.ComputeForward(
+          bias_dropout_residual_out_data, ln_scale_2_data, ln_bias_2_data,
+          final_out_data, ln_mean_2_data, ln_var_2_data);
     }
   }
 };
@@ -280,7 +326,7 @@ class FusedAttentionGradKernel : public framework::OpKernel<T> {
 
     // output's grad
     auto *d_x = ctx.Output<Tensor>(framework::GradVarName("X"));
-    auto *d_qkv_out = ctx.Output<Tensor>(framework::GradVarName("QKVOut"));
+    // auto *d_qkv_out = ctx.Output<Tensor>(framework::GradVarName("QKVOut"));
     auto *d_qkv_bias_out =
         ctx.Output<Tensor>(framework::GradVarName("QKVBiasOut"));
     auto *d_qktv_out = ctx.Output<Tensor>(framework::GradVarName("QKTVOut"));
@@ -299,7 +345,7 @@ class FusedAttentionGradKernel : public framework::OpKernel<T> {
     auto *d_bias_dropout_residual_out =
         ctx.Output<Tensor>(framework::GradVarName("BiasDropoutResidualOut"));
     auto *d_x_data = d_x->mutable_data<T>(ctx.GetPlace());
-    auto *d_qkv_out_data = d_qkv_out->mutable_data<T>(ctx.GetPlace());
+    // auto *d_qkv_out_data = d_qkv_out->mutable_data<T>(ctx.GetPlace());
     auto *d_qkv_bias_out_data = d_qkv_bias_out->mutable_data<T>(ctx.GetPlace());
     auto *d_qktv_out_data = d_qktv_out->mutable_data<T>(ctx.GetPlace());
     auto *d_transpose_out_2_data =
@@ -410,9 +456,12 @@ class FusedAttentionGradKernel : public framework::OpKernel<T> {
         *attn_dropout_out, *qk_out, *src_mask_out, *d_fmha_out, d_qktv_out,
         d_attn_dropout_out, d_softmax_out, d_src_mask_out, d_qk_out,
         d_transpose_out_2, nullptr, d_qkv_bias_out);
-    cudaMemcpyAsync(d_qkv_out_data, d_qkv_bias_out_data,
-                    bsz_seq * 3 * num_head * dim_head * sizeof(T),
-                    cudaMemcpyDeviceToDevice);
+
+    // d_qkv_bias_out = d_qkv_out, so directly use d_qkv_bias_out to save
+    // memory.
+    // cudaMemcpyAsync(d_qkv_out_data, d_qkv_bias_out_data,
+    //                bsz_seq * 3 * num_head * dim_head * sizeof(T),
+    //                cudaMemcpyDeviceToDevice);
 
     if (pre_layer_norm) {
       auto *ln_mean = ctx.Input<Tensor>("LnMean");

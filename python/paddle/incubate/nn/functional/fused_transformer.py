@@ -333,7 +333,7 @@ def fused_multi_head_attention(x,
             0] == 3, "The shape of qkv_weight should be [3, num_head, head_dim, embed_dim]."
         assert qkv_weight.shape[3] == x.shape[
             2], "The 3rd dim of qkv_weight and 2nd dim of x should be the same, i.e., embed_dim."
-        _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, final_out = _C_ops.fused_attention(
+        _, _, _, qkv_out, qkv_bias_out, transpose_out, qk_out, qktv_out, softmax_out, _, _, attn_mask_out, fmha_out, linear_out, _, _, _, bias_dropout_residual_out, final_out = _C_ops.fused_attention(
             x, pre_ln_scale, pre_ln_bias, qkv_weight, qkv_bias, attn_mask,
             linear_weight, linear_bias, ln_scale, ln_bias, 'pre_layer_norm',
             pre_layer_norm, 'epsilon', pre_ln_epsilon, 'dropout_rate',
@@ -344,7 +344,7 @@ def fused_multi_head_attention(x,
             if seed is not None else 0, 'dropout_seed', seed
             if seed is not None else 0, 'attn_dropout_implementation', mode,
             'dropout_implementation', mode)
-        return final_out
+        return final_out, qkv_out, qkv_bias_out, transpose_out, qk_out, qktv_out, softmax_out, linear_out, bias_dropout_residual_out
     else:
         helper = LayerHelper('fused_multi_head_attention', **locals())
         dtype = x.dtype
